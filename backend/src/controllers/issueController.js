@@ -2,6 +2,8 @@ const { validationResult } = require('express-validator');
 const { Issue, statuses } = require('../models');
 const { reverseGeocode } = require('../utils/geocoding');
 const { computePHash, findSimilarImages } = require('../utils/phash');
+const { verifyPothole } = require('../utils/potholeDetectionAI');
+const logger = require('../utils/logger');
 const path = require('path');
 
 // EXIF + geo distance validation
@@ -13,22 +15,13 @@ const { getDistance } = require('geolib');
 
 const createIssue = async (req, res, next) => {
   try {
-    console.log('=== CREATE ISSUE REQUEST ===');
-    console.log('Body:', req.body);
-    console.log(
-      'File:',
-      req.file
-        ? { filename: req.file.filename, size: req.file.size }
-        : 'No file'
-    );
-    console.log('Headers:', {
-      'content-type': req.headers['content-type'],
-      authorization: req.headers['authorization'] ? 'Present' : 'Missing',
+    logger.request('POST', '/api/issues', {
+      hasFile: !!req.file,
+      bodyKeys: Object.keys(req.body),
     });
 
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      console.log('Validation errors:', errors.array());
       return res.status(400).json({ errors: errors.array() });
     }
 
@@ -37,15 +30,6 @@ const createIssue = async (req, res, next) => {
     // Convert latitude and longitude to numbers if they're strings
     let lat = parseFloat(latitude);
     let lon = parseFloat(longitude);
-
-    console.log('Location data received:', {
-      latitudeRaw: latitude,
-      longitudeRaw: longitude,
-      latitudeParsed: lat,
-      longitudeParsed: lon,
-      latitudeValid: !isNaN(lat),
-      longitudeValid: !isNaN(lon),
-    });
 
     // Validate location coordinates
     if (
@@ -77,12 +61,10 @@ const createIssue = async (req, res, next) => {
         req.headers['x-forwarded-proto'] ||
         'http';
       photoUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
-      console.log('File uploaded:', { filename: req.file.filename, photoUrl });
     } else if (req.body.photo_url) {
       // Fallback to photo_url if provided (for backward compatibility)
       photoUrl = req.body.photo_url;
     }
-    console.log('photoUrl final:', photoUrl);
 
     // Flag to mark issues that require manual review (e.g. when EXIF GPS is missing)
     let needs_review = false;
@@ -93,12 +75,61 @@ const createIssue = async (req, res, next) => {
       needs_review = true;
     }
 
+    // ==================== AI POTHOLE VERIFICATION (RUN FIRST) ====================
+    // Run AI detection BEFORE EXIF validation to quickly reject non-pothole images
+    // This saves time on expensive metadata checks for obviously wrong images
+    let ai_verified = null;
+    let ai_confidence = null;
+    let ai_label = null;
+
+    if (req.file) {
+      try {
+        const uploadedPath =
+          req.file.path ||
+          path.join(__dirname, '../../uploads', req.file.filename);
+
+        const aiResult = await verifyPothole(uploadedPath);
+
+        ai_verified = aiResult.isPothole;
+        ai_confidence = aiResult.confidence;
+        ai_label = aiResult.label;
+
+        logger.debug('AI verification complete', {
+          isPothole: aiResult.isPothole,
+          confidence: aiResult.confidence,
+        });
+
+        if (!aiResult.isPothole) {
+          return res.status(400).json({
+            message:
+              'This does not appear to be a pothole or road damage. Please upload a photo of an actual pothole or road damage.',
+            ai_result: {
+              isPothole: false,
+              confidence: aiResult.confidence,
+              topPrediction: aiResult.topPrediction,
+              reason: aiResult.analysis?.hasRejectKeyword
+                ? 'Contains people/animals/indoor content'
+                : 'Not a road photo',
+            },
+          });
+        }
+      } catch (aiErr) {
+        // If AI verification fails, reject the upload with friendly message
+        console.warn('⚠️  AI verification failed:', aiErr.message);
+        return res.status(400).json({
+          message:
+            '⚠️  Could not verify image quality. Please try again with a clearer photo.',
+          error: aiErr.message,
+        });
+      }
+    }
+    // ====================================================================
+
     // Reverse geocode coordinates to get address
     let address = null;
     try {
       if (latitude && longitude) {
         address = await reverseGeocode(latitude, longitude);
-        console.log('📍 Address resolved:', address);
       }
     } catch (geocodeError) {
       // Even if geocoding fails, we have the coordinates
@@ -120,16 +151,8 @@ const createIssue = async (req, res, next) => {
           key.startsWith('GPS')
         );
 
-        // ========== EXIF VALIDATION ==========
+        // EXIF VALIDATION
         // Accept camera photos (with Make/Model) or gallery photos (without Make/Model)
-        console.log('📸 EXIF validation:');
-        console.log(`   - Has EXIF data: ${!!exif}`);
-        console.log(`   - EXIF keys: ${Object.keys(exif).length}`);
-        console.log(`   - Camera Make: ${exif.Make || 'N/A'}`);
-        console.log(`   - Camera Model: ${exif.Model || 'N/A'}`);
-        console.log(`   - DateTimeOriginal: ${exif.DateTimeOriginal || 'N/A'}`);
-        console.log(`   - GPS Fields: ${gpsFields.length > 0 ? 'YES' : 'NO'}`);
-
         // 1. REJECT if no EXIF data or only has minimal/generic fields
         // Check for meaningful EXIF data - at least one of: Make/Model (camera), DateTimeOriginal, GPS
         const hasMakeOrModel = !!(exif.Make || exif.Model);
@@ -139,13 +162,6 @@ const createIssue = async (req, res, next) => {
           hasMakeOrModel || hasDateTimeOriginal || hasGPS;
 
         if (!exif || Object.keys(exif).length === 0 || !hasSignificantExif) {
-          console.log('❌ EXIF validation failed:', {
-            hasMakeOrModel,
-            hasDateTimeOriginal,
-            hasGPS,
-            hasSignificantExif,
-            exifKeyCount: Object.keys(exif).length,
-          });
           return res.status(400).json({
             message:
               'Photo has no camera metadata. Please capture a new photo directly with your device camera or select from your device photo which has accurate location information.',
@@ -201,10 +217,6 @@ const createIssue = async (req, res, next) => {
         const ageMs = Date.now() - photoDate.getTime();
         const maxAgeMs = 24 * 60 * 60 * 1000; // 24 hours for both camera and gallery
 
-        console.log(
-          `   - Photo age: ${(ageMs / 1000 / 60).toFixed(0)} minutes`
-        );
-
         // 3. REJECT if older than 24 hours
         if (ageMs > maxAgeMs) {
           return res.status(400).json({
@@ -217,19 +229,10 @@ const createIssue = async (req, res, next) => {
         let exifLat = null;
         let exifLon = null;
         let gpsRef = { lat: 'N', lon: 'E' };
-        let hasEmbeddedGPS = false;
-
-        console.log('📍 GPS EXIF fields:', {
-          GPSLatitude: exif.GPSLatitude,
-          GPSLongitude: exif.GPSLongitude,
-          GPSLatitudeRef: exif.GPSLatitudeRef,
-          GPSLongitudeRef: exif.GPSLongitudeRef,
-          GPSPosition: exif.GPSPosition,
-          allGpsKeys: Object.keys(exif).filter((k) => k.includes('GPS')),
-        });
+        let hasRealEmbeddedGPS = false; // True only if photo has actual GPS coordinates
 
         // Try multiple ways to extract GPS from EXIF
-        // Method 1: Direct GPS fields (usually works)
+        // Method 1: Direct GPS fields (usually works for camera photos)
         if (
           exif.GPSLatitude !== undefined &&
           exif.GPSLongitude !== undefined &&
@@ -240,8 +243,7 @@ const createIssue = async (req, res, next) => {
           exifLon = exif.GPSLongitude;
           gpsRef.lat = exif.GPSLatitudeRef || 'N';
           gpsRef.lon = exif.GPSLongitudeRef || 'E';
-          hasEmbeddedGPS = true;
-          console.log('   📍 Method 1: GPS found in direct EXIF fields');
+          hasRealEmbeddedGPS = true; // This is real GPS data
         }
         // Method 2: GPSPosition string (sometimes used)
         else if (exif.GPSPosition && typeof exif.GPSPosition === 'string') {
@@ -249,33 +251,21 @@ const createIssue = async (req, res, next) => {
           if (coords.length >= 2 && !isNaN(coords[0]) && !isNaN(coords[1])) {
             exifLat = coords[0];
             exifLon = coords[1];
-            hasEmbeddedGPS = true;
-            console.log('   📍 Method 2: GPS position found in string format');
+            hasRealEmbeddedGPS = true; // This is real GPS data
           }
         }
-        // Method 3: Check if there are ANY GPS fields present (indicates location was recorded)
-        // In this case, use device location as it's more reliable
-        else if (Object.keys(exif).some((k) => k.startsWith('GPS'))) {
-          console.log(
-            '   📍 Method 3: GPS fields exist but coordinates are unreadable (likely binary format)'
-          );
-          console.log('   📍 Using device location as fallback');
+        // Method 3: Gallery photos without GPS - use device location
+        else {
           exifLat = lat;
           exifLon = lon;
-          hasEmbeddedGPS = true; // Mark as having GPS info even though we're using device location
+          hasRealEmbeddedGPS = false; // Using device location as fallback
         }
 
         const deviceLatNum = lat;
         const deviceLonNum = lon;
 
         // 4. If no EXIF GPS at all, use device location (for gallery photos)
-        if (!hasEmbeddedGPS) {
-          console.log(
-            '   📍 No GPS fields found - using device location as fallback'
-          );
-          exifLat = deviceLatNum;
-          exifLon = deviceLonNum;
-        }
+        // This was already handled above in Method 3
 
         // Handle GPS coordinate formats (can be array or string or number)
         let exifLatNum = null;
@@ -284,10 +274,6 @@ const createIssue = async (req, res, next) => {
         if (Array.isArray(exifLat)) {
           // GPS format: [degrees, minutes, seconds]
           exifLatNum = exifLat[0] + exifLat[1] / 60 + exifLat[2] / 3600;
-          console.log('   📍 Converted array GPS latitude:', {
-            exifLat,
-            exifLatNum,
-          });
         } else {
           exifLatNum = Number(exifLat);
         }
@@ -295,10 +281,6 @@ const createIssue = async (req, res, next) => {
         if (Array.isArray(exifLon)) {
           // GPS format: [degrees, minutes, seconds]
           exifLonNum = exifLon[0] + exifLon[1] / 60 + exifLon[2] / 3600;
-          console.log('   📍 Converted array GPS longitude:', {
-            exifLon,
-            exifLonNum,
-          });
         } else {
           exifLonNum = Number(exifLon);
         }
@@ -306,13 +288,6 @@ const createIssue = async (req, res, next) => {
         // Apply GPS reference directions (N/S, E/W)
         if (gpsRef.lat === 'S') exifLatNum *= -1;
         if (gpsRef.lon === 'W') exifLonNum *= -1;
-
-        console.log('   📍 Final GPS values:', {
-          exifLatNum,
-          exifLonNum,
-          deviceLatNum,
-          deviceLonNum,
-        });
 
         // 5. REJECT if GPS coordinates are invalid
         if (
@@ -332,10 +307,10 @@ const createIssue = async (req, res, next) => {
           { latitude: deviceLatNum, longitude: deviceLonNum }
         );
 
-        console.log(`   📍 GPS distance: ${distanceMeters.toFixed(0)}m`);
-
         // 6. REJECT if photo location is more than 200m from device location
-        if (distanceMeters > 200) {
+        // BUT: Only check if we have ACTUAL embedded GPS from the photo itself
+        // If photo came from gallery without GPS, we trust the device location instead
+        if (distanceMeters > 200 && hasRealEmbeddedGPS) {
           return res.status(400).json({
             message:
               `Photo was taken ${distanceMeters.toFixed(0)}m away from reported location. ` +
@@ -362,9 +337,7 @@ const createIssue = async (req, res, next) => {
           req.file.path ||
           path.join(__dirname, '../../uploads', req.file.filename);
 
-        console.log('🔍 Computing pHash for:', req.file.filename);
         phash = await computePHash(uploadedPath);
-        console.log('📊 pHash computed:', phash);
 
         // Fetch all existing pHashes from the database
         const existingIssues = await Issue.findAll({
@@ -372,8 +345,9 @@ const createIssue = async (req, res, next) => {
           where: { phash: { [require('sequelize').Op.ne]: null } },
         });
 
-        // Find similar images (>= 90% similarity)
-        const SIMILARITY_THRESHOLD = 90;
+        // Find similar images (>= 85% similarity)
+        // 85% = ~10 bits different out of 64, allows for minor cropping/compression
+        const SIMILARITY_THRESHOLD = 80;
         const similarImages = findSimilarImages(
           phash,
           existingIssues,
@@ -381,20 +355,20 @@ const createIssue = async (req, res, next) => {
         );
 
         if (similarImages.length > 0) {
-          console.warn(
-            '⚠️  DUPLICATE ALERT: Image is similar to',
-            similarImages.length,
-            'existing image(s):'
-          );
-          similarImages.forEach((img) => {
-            console.warn(
-              `   - Issue ${img.id}: ${img.similarity.toFixed(1)}% similarity`
-            );
-          });
+          const duplicateInfo = similarImages.map((img) => ({
+            issueId: img.id,
+            similarity: img.similarity.toFixed(1),
+          }));
 
-          // Mark for manual review instead of blocking
-          needs_review = true;
-          console.log('🚩 Issue marked for review due to image similarity');
+          // REJECT duplicate images - don't allow the upload
+          return res.status(400).json({
+            message:
+              '❌ This image appears to be a duplicate of an existing report. ' +
+              'Please check if this pothole has already been reported.',
+            duplicateInfo: duplicateInfo,
+            action:
+              'Please upload a different photo or check existing reports before submitting.',
+          });
         }
       } catch (phashErr) {
         // If pHash computation fails, log but don't block the upload
@@ -402,7 +376,6 @@ const createIssue = async (req, res, next) => {
         // We don't set needs_review here - let EXIF validation handle it
       }
     }
-    // ====================================================================
 
     const issue = await Issue.create({
       title,
@@ -412,14 +385,20 @@ const createIssue = async (req, res, next) => {
       longitude,
       address,
       status,
-      needs_review,
+      needs_review: false, // Only valid potholes reach here
       phash,
+      ai_verified: ai_verified !== null ? ai_verified : true, // If no AI check, assume verified
+      ai_confidence: ai_confidence,
+      ai_label: ai_label || 'pothole',
     });
-    console.log('✅ Issue created successfully:', issue.id);
+    
+    logger.success('Issue created', { id: issue.id });
     return res.status(201).json(issue);
   } catch (error) {
-    console.error('❌ CREATE ISSUE ERROR:', error.message);
-    console.error('Stack:', error.stack);
+    logger.error('CREATE ISSUE ERROR', {
+      message: error.message,
+      stack: error.stack,
+    });
     return next(error);
   }
 };

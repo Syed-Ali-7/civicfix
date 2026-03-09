@@ -158,15 +158,9 @@ const ReportScreen = ({ navigation }) => {
 
       setUploadStatus("Processing (validating photo, getting address...)");
 
-      // Use axios instance so Authorization header is automatically applied
-      // (AuthContext calls setAuthToken when logging in). Axios handles multipart
-      // uploads reliably on React Native when using FormData.
       let issueData;
       try {
-        // The 'Content-Type' header is explicitly set to 'multipart/form-data'
-        // to ensure the server correctly interprets the request. Axios
-        // typically handles this, but being explicit can resolve edge cases.
-        // Note: timeout is 30s to allow geocoding retries on backend
+
         const axiosResponse = await api.post("/api/issues", formData, {
           headers: {
             "Content-Type": "multipart/form-data",
@@ -175,6 +169,7 @@ const ReportScreen = ({ navigation }) => {
         });
         issueData = axiosResponse.data;
       } catch (axiosErr) {
+
         // If axiosErr.response exists, map common server messages to UI
         if (axiosErr.response) {
           const status = axiosErr.response.status;

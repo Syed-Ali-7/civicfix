@@ -58,6 +58,24 @@ const Issue = sequelize.define(
       allowNull: false,
       defaultValue: false,
     },
+    // AI verification - whether the image contains a pothole
+    ai_verified: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: null,
+    },
+    // AI confidence score (0-1)
+    ai_confidence: {
+      type: DataTypes.DECIMAL(5, 4),
+      allowNull: true,
+      defaultValue: null,
+    },
+    // AI detection label (pothole, not_pothole, etc.)
+    ai_label: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      defaultValue: null,
+    },
     status: {
       type: DataTypes.ENUM(...statuses),
       allowNull: false,

@@ -80,4 +80,24 @@ export const issuesAPI = {
   },
 };
 
+// AI API
+export const aiAPI = {
+  verifyPothole: async (issueId) => {
+    const response = await api.post(`/ai/verify-pothole/${issueId}`);
+    return response.data;
+  },
+  batchVerify: async (issueIds) => {
+    const response = await api.post("/ai/batch-verify", { issueIds });
+    return response.data;
+  },
+  getModelInfo: async () => {
+    const response = await api.get("/ai/model-info");
+    return response.data;
+  },
+  getStats: async () => {
+    const response = await api.get("/ai/stats");
+    return response.data;
+  },
+};
+
 export default api;

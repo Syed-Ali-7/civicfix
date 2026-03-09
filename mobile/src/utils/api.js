@@ -1,83 +1,29 @@
 import axios from "axios";
+import Constants from "expo-constants";
 
-const DEV_SERVER_IP = "10.177.194.179";
-const PORT = 5000;
+// Backend URL configuration
+let API_BASE_URL;
 
-export const API_BASE_URL = `http://${DEV_SERVER_IP}:${PORT}`;
+if (__DEV__) {
+  // Development mode: Direct connection to backend IP
+  API_BASE_URL = "http://192.168.1.7:5000";
+  console.log("🌐 Backend at:", API_BASE_URL);
+} else {
+  API_BASE_URL =
+    process.env.REACT_APP_API_URL || "https://your-production-api.com";
+}
 
-console.log("🌐 Using backend at:", API_BASE_URL);
+export { API_BASE_URL };
 
 const api = axios.create({
   baseURL: API_BASE_URL.replace(/\/$/, ""),
-  timeout: 30000, // Increased from 10s to 30s to accommodate geocoding retries
+  timeout: 120000, // 120s timeout: geocoding + AI inference can be slow
   headers: {
     Accept: "application/json",
   },
 });
 
-// Debug: log the API base so we can verify the app is using the correct host
-try {
-  // eslint-disable-next-line no-console
-  console.log("[api] API_BASE_URL =", API_BASE_URL);
-} catch (e) {}
-
-// Log outgoing requests for easier debugging on device
-api.interceptors.request.use((config) => {
-  try {
-    // eslint-disable-next-line no-console
-    console.log(
-      "[api] request",
-      config.method,
-      config.url,
-      config.baseURL || API_BASE_URL
-    );
-  } catch (e) {}
-  return config;
-});
-
-// Detailed response error logging to help diagnose network issues on device
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    try {
-      // eslint-disable-next-line no-console
-      console.log("[api] response error", {
-        message: error.message,
-        code: error.code,
-        config: error.config && {
-          method: error.config.method,
-          url: error.config.url,
-        },
-        response: error.response && {
-          status: error.response.status,
-          data: error.response.data,
-        },
-      });
-    } catch (e) {}
-    return Promise.reject(error);
-  }
-);
-
-// Quick startup probe to /health so we can see connectivity immediately in device logs
-(async () => {
-  try {
-    const res = await api.get("/health");
-    // eslint-disable-next-line no-console
-    console.log("[api] health ok", res.data);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.log("[api] health check failed", err.message || err);
-  }
-})();
-
-export const setAuthToken = (token) => {
-  if (token) {
-    api.defaults.headers.common.Authorization = `Bearer ${token}`;
-  } else {
-    delete api.defaults.headers.common.Authorization;
-  }
-};
-
+// Response error handler
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -85,7 +31,16 @@ api.interceptors.response.use(
     if (!error.response) {
       if (error.code === "ECONNABORTED") {
         return Promise.reject(
-          new Error("Request timeout. The server may be slow or unreachable.")
+          new Error(
+            "Request timeout (120s exceeded). " +
+              "The backend server is taking too long to respond. " +
+              "This can happen during:\n" +
+              "- Photo AI validation (checking for potholes)\n" +
+              "- Address geocoding\n" +
+              "- Duplicate image checking\n\n" +
+              "Please wait a moment and try again. " +
+              "If this persists, check if the backend server is responding normally."
+          )
         );
       }
       if (error.message === "Network Error" || error.code === "ERR_NETWORK") {
@@ -95,8 +50,8 @@ api.interceptors.response.use(
             `Cannot connect to server at ${apiUrl}. ` +
               "Please ensure:\n" +
               "1. Backend server is running (npm run dev)\n" +
-              "2. Tunnel is running if using localtunnel (npm run tunnel)\n" +
-              "3. Check your internet connection"
+              "2. Your device is on the same WiFi as your laptop\n" +
+              "3. Firewall allows port 5000"
           )
         );
       }
@@ -129,9 +84,7 @@ api.interceptors.response.use(
 
     // Handle validation errors (express-validator format)
     if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
-      // Extract validation error messages
       const errorMessages = data.errors.map((err) => {
-        // express-validator uses 'msg' property
         return (
           err.msg ||
           err.message ||
@@ -147,5 +100,23 @@ api.interceptors.response.use(
     return Promise.reject(new Error(message));
   }
 );
+
+// Quick startup probe to /health so we can see connectivity immediately in device logs
+(async () => {
+  try {
+    const res = await api.get("/health");
+    console.log("[api] health ok", res.data);
+  } catch (err) {
+    console.log("[api] health check failed", err.message || err);
+  }
+})();
+
+export const setAuthToken = (token) => {
+  if (token) {
+    api.defaults.headers.common.Authorization = `Bearer ${token}`;
+  } else {
+    delete api.defaults.headers.common.Authorization;
+  }
+};
 
 export default api;

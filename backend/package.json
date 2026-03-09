@@ -17,6 +17,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow-models/mobilenet": "^2.1.1",
+    "@tensorflow/tfjs": "^4.17.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -25,8 +28,10 @@
     "express-validator": "^7.3.0",
     "geolib": "^3.3.3",
     "image-hash": "^5.3.2",
+    "jimp": "^0.22.12",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
+    "onnxruntime-node": "^1.23.2",
     "pg": "^8.16.3",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.7"

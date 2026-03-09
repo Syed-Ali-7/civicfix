@@ -149,6 +149,30 @@ const Dashboard = () => {
         ),
     },
     {
+      field: "ai_verified",
+      headerName: "AI Status",
+      width: 140,
+      headerAlign: "center",
+      align: "center",
+      renderCell: (params) => {
+        if (params.value === null || params.value === undefined) {
+          return (
+            <Chip
+              label="Not Checked"
+              color="default"
+              size="small"
+              variant="outlined"
+            />
+          );
+        }
+        return params.value ? (
+          <Chip label="✓ Pothole" color="success" size="small" />
+        ) : (
+          <Chip label="✗ No Pothole" color="error" size="small" />
+        );
+      },
+    },
+    {
       field: "created_at",
       headerName: "Created Date",
       width: 150,

@@ -19,8 +19,9 @@ import {
 import {
   ArrowBack as BackIcon,
   CloudUpload as UploadIcon,
+  Psychology as AIIcon,
 } from "@mui/icons-material";
-import { issuesAPI } from "../api/api";
+import { issuesAPI, aiAPI } from "../api/api";
 
 const IssueDetails = () => {
   const { id } = useParams();
@@ -32,6 +33,7 @@ const IssueDetails = () => {
   const [error, setError] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState("");
+  const [verifying, setVerifying] = useState(false);
 
   useEffect(() => {
     fetchIssue();
@@ -96,6 +98,32 @@ const IssueDetails = () => {
       setError(errorMsg);
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleAIVerification = async () => {
+    try {
+      setVerifying(true);
+      setError("");
+      const response = await aiAPI.verifyPothole(id);
+
+      // Refresh issue to show updated AI status
+      await fetchIssue();
+
+      // Show success message based on result
+      if (response.data.ai_verified) {
+        setError("");
+      } else {
+        setError(
+          `AI Detection: ${response.message}. Confidence: ${(
+            response.data.ai_confidence * 100
+          ).toFixed(1)}%`
+        );
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || "AI verification failed");
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -179,6 +207,78 @@ const IssueDetails = () => {
               color={issue.needs_review ? "error" : "success"}
               variant={issue.needs_review ? "filled" : "outlined"}
             />
+          </Box>
+
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+              AI Pothole Verification
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              {issue.ai_verified === null ? (
+                <>
+                  <Chip
+                    label="Not Verified"
+                    color="default"
+                    variant="outlined"
+                  />
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<AIIcon />}
+                    onClick={handleAIVerification}
+                    disabled={verifying || !issue.photo_url}
+                  >
+                    {verifying ? "Verifying..." : "Run AI Verification"}
+                  </Button>
+                </>
+              ) : issue.ai_verified ? (
+                <>
+                  <Chip label="✓ Pothole Detected" color="success" />
+                  {issue.ai_confidence && (
+                    <Chip
+                      label={`Confidence: ${(issue.ai_confidence * 100).toFixed(
+                        1
+                      )}%`}
+                      color="info"
+                      variant="outlined"
+                      size="small"
+                    />
+                  )}
+                  <Button
+                    size="small"
+                    variant="text"
+                    startIcon={<AIIcon />}
+                    onClick={handleAIVerification}
+                    disabled={verifying}
+                  >
+                    Re-verify
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Chip label="✗ No Pothole Detected" color="error" />
+                  {issue.ai_confidence && (
+                    <Chip
+                      label={`Confidence: ${(issue.ai_confidence * 100).toFixed(
+                        1
+                      )}%`}
+                      color="warning"
+                      variant="outlined"
+                      size="small"
+                    />
+                  )}
+                  <Button
+                    size="small"
+                    variant="text"
+                    startIcon={<AIIcon />}
+                    onClick={handleAIVerification}
+                    disabled={verifying}
+                  >
+                    Re-verify
+                  </Button>
+                </>
+              )}
+            </Box>
           </Box>
 
           <Box sx={{ mb: 3 }}>

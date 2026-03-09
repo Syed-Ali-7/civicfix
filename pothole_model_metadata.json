@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-01-19T17:35:16.436755",
+  "model_path": "pothole_model.keras",
+  "image_size": 224,
+  "batch_size": 32,
+  "test_accuracy": 0.803680956363678,
+  "test_precision": 0.5932203531265259,
+  "test_recall": 1.0,
+  "architecture": "Custom CNN (4 conv blocks + data augmentation)"
+}

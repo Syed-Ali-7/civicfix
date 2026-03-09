@@ -11,7 +11,6 @@ if (!fs.existsSync(uploadsDir)) {
 // Configure storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    console.log('Multer destination called for file:', file.originalname);
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
@@ -19,17 +18,12 @@ const storage = multer.diskStorage({
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const ext = path.extname(file.originalname);
     const filename = `issue-${uniqueSuffix}${ext}`;
-    console.log('Multer filename:', filename);
     cb(null, filename);
   },
 });
 
 // File filter - only allow images
 const fileFilter = (req, file, cb) => {
-  console.log('File filter called:', {
-    originalname: file.originalname,
-    mimetype: file.mimetype,
-  });
   const allowedTypes = /jpeg|jpg|png|gif|webp/;
   const extname = allowedTypes.test(
     path.extname(file.originalname).toLowerCase()
@@ -37,10 +31,8 @@ const fileFilter = (req, file, cb) => {
   const mimetype = allowedTypes.test(file.mimetype);
 
   if (mimetype && extname) {
-    console.log('File passed filter');
     return cb(null, true);
   } else {
-    console.log('File rejected by filter');
     cb(new Error('Only image files are allowed (jpeg, jpg, png, gif, webp)'));
   }
 };
@@ -54,26 +46,13 @@ const upload = multer({
   fileFilter: fileFilter,
 });
 
-// Wrap multer to log when it's invoked
+// Wrap multer to handle errors gracefully
 const wrappedUpload = {
   single: (fieldName) => {
     return (req, res, next) => {
-      console.log(
-        'Multer middleware invoked for field:',
-        fieldName,
-        'Content-Type:',
-        req.headers['content-type']
-      );
       return upload.single(fieldName)(req, res, (err) => {
         if (err) {
-          console.log('Multer error:', err.message);
-        } else {
-          console.log(
-            'Multer success, req.file:',
-            req.file
-              ? { fieldname: req.file.fieldname, filename: req.file.filename }
-              : 'undefined'
-          );
+          console.error('File upload error:', err.message);
         }
         next(err);
       });
