@@ -32,6 +32,10 @@ const User = sequelize.define(
       allowNull: false,
       defaultValue: 'citizen',
     },
+    designation: {
+      type: DataTypes.STRING(30),
+      allowNull: true,
+    },
   },
   {
     tableName: 'users',

@@ -58,6 +58,16 @@ const wrappedUpload = {
       });
     };
   },
+  fields: (fields) => {
+    return (req, res, next) => {
+      return upload.fields(fields)(req, res, (err) => {
+        if (err) {
+          console.error('File upload error:', err.message);
+        }
+        next(err);
+      });
+    };
+  },
 };
 
 module.exports = wrappedUpload;

@@ -5,15 +5,36 @@ import {
   ScrollView,
   Image,
   ActivityIndicator,
+  Modal,
 } from "react-native";
-import { Text, Button, Chip, Card } from "react-native-paper";
+import { Text, Button, Chip, Card, Snackbar } from "react-native-paper";
 import { useRoute } from "@react-navigation/native";
+import * as Location from "expo-location";
+import * as ImagePicker from "expo-image-picker";
 import api, { API_BASE_URL } from "../utils/api";
 
 const STATUS_COLORS = {
   Open: "#f97316",
   "In Progress": "#eab308",
   Resolved: "#22c55e",
+  Closed: "#16a34a",
+  Reopened: "#dc2626",
+};
+
+const distanceMeters = (a, b) => {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const earth = 6371000;
+
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLon = toRad(b.longitude - a.longitude);
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+
+  const hav =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(hav), Math.sqrt(1 - hav));
+  return earth * c;
 };
 
 const IssueDetailScreen = ({ navigation }) => {
@@ -22,6 +43,10 @@ const IssueDetailScreen = ({ navigation }) => {
   const [issue, setIssue] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
+  const [selectedFeedbackImage, setSelectedFeedbackImage] = useState(null);
 
   useEffect(() => {
     fetchIssueDetails();
@@ -75,6 +100,152 @@ const IssueDetailScreen = ({ navigation }) => {
       setError(err.message || "Failed to load issue details");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getCurrentLocation = async () => {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") {
+      throw new Error("Location permission is required");
+    }
+
+    const current = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.High,
+    });
+
+    return {
+      latitude: current.coords.latitude,
+      longitude: current.coords.longitude,
+    };
+  };
+
+  const pickFeedbackImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== "granted") {
+      throw new Error("Gallery permission is required to upload rejection photo");
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false,
+      quality: 1,
+    });
+
+    if (result.canceled || !result.assets || !result.assets[0]) {
+      return null;
+    }
+
+    return result.assets[0];
+  };
+
+  const openModal = () => {
+    setFeedbackModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setFeedbackModalVisible(false);
+  };
+
+  const submitRejectedFeedback = async (image) => {
+    setSubmittingFeedback(true);
+
+    try {
+      if (!image) {
+        throw new Error("Please select an image before submitting feedback");
+      }
+
+      const userLocation = await getCurrentLocation();
+      const issueLocation = {
+        latitude: Number(issue.latitude),
+        longitude: Number(issue.longitude),
+      };
+
+      const meters = distanceMeters(issueLocation, userLocation);
+      if (meters > 100) {
+        throw new Error("You must be near the issue location");
+      }
+
+      const filename = image.uri.split("/").pop() || `feedback-${Date.now()}.jpg`;
+      const match = /\.(\w+)$/.exec(filename);
+      const mime = match ? `image/${match[1]}` : "image/jpeg";
+
+      const formData = new FormData();
+      formData.append("status", "rejected");
+      formData.append("latitude", String(userLocation.latitude));
+      formData.append("longitude", String(userLocation.longitude));
+      formData.append("image", {
+        uri: image.uri,
+        name: filename,
+        type: mime,
+      });
+
+      await api.post(`/api/issues/${issueId}/feedback`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      setSelectedFeedbackImage(null);
+      setFeedbackMessage("Issue reopened and escalated.");
+      await fetchIssueDetails();
+    } catch (err) {
+      setError(err.message || "Failed to submit rejection");
+    } finally {
+      setSubmittingFeedback(false);
+    }
+  };
+
+  const handleCamera = async () => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (perm.status !== "granted") {
+        throw new Error("Camera permission is required to take a photo");
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (result.canceled || !result.assets || !result.assets[0]) {
+        setFeedbackMessage("Photo capture cancelled");
+        return;
+      }
+
+      const image = result.assets[0];
+      setSelectedFeedbackImage(image);
+      closeModal();
+      await submitRejectedFeedback(image);
+    } catch (err) {
+      setError(err.message || "Unable to capture photo");
+    }
+  };
+
+  const handleGallery = async () => {
+    try {
+      const image = await pickFeedbackImage();
+      if (!image) {
+        setFeedbackMessage("Image selection cancelled");
+        return;
+      }
+
+      setSelectedFeedbackImage(image);
+      closeModal();
+      await submitRejectedFeedback(image);
+    } catch (err) {
+      setError(err.message || "Unable to pick image from gallery");
+    }
+  };
+
+  const handleConfirmFixed = async () => {
+    try {
+      setSubmittingFeedback(true);
+      await api.post(`/api/issues/${issueId}/feedback`, { status: "confirmed" });
+      setFeedbackMessage("Thank you. Issue marked as closed.");
+      await fetchIssueDetails();
+    } catch (err) {
+      setError(err.message || "Failed to submit feedback");
+    } finally {
+      setSubmittingFeedback(false);
     }
   };
 
@@ -227,6 +398,42 @@ const IssueDetailScreen = ({ navigation }) => {
         </Card>
       )}
 
+      {/* Citizen feedback actions for resolved issues */}
+      {issue.status === "Resolved" && (
+        <Card style={styles.card}>
+          <Card.Content>
+            <Text variant="titleSmall" style={styles.sectionTitle}>
+              Is this issue fixed?
+            </Text>
+            <View style={styles.feedbackButtonsRow}>
+              <Button
+                mode="contained"
+                icon="check-circle"
+                buttonColor="#16a34a"
+                textColor="#ffffff"
+                onPress={handleConfirmFixed}
+                disabled={submittingFeedback}
+                style={styles.feedbackButton}
+              >
+                Yes, Issue Fixed
+              </Button>
+              <Button
+                mode="contained"
+                icon="close-circle"
+                buttonColor="#dc2626"
+                textColor="#ffffff"
+                onPress={openModal}
+                disabled={submittingFeedback}
+                loading={submittingFeedback}
+                style={styles.feedbackButton}
+              >
+                No, Not Fixed
+              </Button>
+            </View>
+          </Card.Content>
+        </Card>
+      )}
+
       {/* Additional Info */}
       {issue.needs_review && (
         <Card style={styles.warningCard}>
@@ -240,6 +447,63 @@ const IssueDetailScreen = ({ navigation }) => {
           </Card.Content>
         </Card>
       )}
+
+      <Snackbar
+        visible={!!feedbackMessage}
+        onDismiss={() => setFeedbackMessage("")}
+        duration={2500}
+      >
+        {feedbackMessage}
+      </Snackbar>
+
+      <Modal
+        visible={feedbackModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet}>
+            <Text variant="titleMedium" style={styles.modalTitle}>
+              Upload Current Condition
+            </Text>
+            <Text variant="bodySmall" style={styles.modalSubtitle}>
+              Add a recent photo to reopen this issue.
+            </Text>
+
+            <Button
+              mode="contained"
+              icon="camera"
+              onPress={handleCamera}
+              disabled={submittingFeedback}
+              contentStyle={styles.modalButtonContent}
+              style={[styles.modalActionButton, styles.cameraButton]}
+            >
+              Take Photo
+            </Button>
+
+            <Button
+              mode="contained-tonal"
+              icon="image"
+              onPress={handleGallery}
+              disabled={submittingFeedback}
+              contentStyle={styles.modalButtonContent}
+              style={styles.modalActionButton}
+            >
+              Choose from Gallery
+            </Button>
+
+            <Button
+              mode="text"
+              onPress={closeModal}
+              disabled={submittingFeedback}
+              style={styles.modalCancelButton}
+            >
+              Cancel
+            </Button>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 };
@@ -346,6 +610,48 @@ const styles = StyleSheet.create({
   },
   warningText: {
     color: "#92400e",
+  },
+  feedbackButtonsRow: {
+    marginTop: 8,
+    gap: 10,
+  },
+  feedbackButton: {
+    borderRadius: 8,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.45)",
+    justifyContent: "flex-end",
+  },
+  modalSheet: {
+    backgroundColor: "#ffffff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 28,
+  },
+  modalTitle: {
+    fontWeight: "700",
+    color: "#0f172a",
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    color: "#475569",
+    marginBottom: 14,
+  },
+  modalActionButton: {
+    marginBottom: 10,
+    borderRadius: 12,
+  },
+  modalButtonContent: {
+    height: 52,
+  },
+  cameraButton: {
+    backgroundColor: "#2563eb",
+  },
+  modalCancelButton: {
+    marginTop: 4,
   },
   loaderContainer: {
     flex: 1,

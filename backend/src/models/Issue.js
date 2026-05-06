@@ -1,7 +1,16 @@
 const { DataTypes } = require('sequelize');
 const { sequelize } = require('../config/db');
+const { User } = require('./User');
 
-const statuses = ['Open', 'In Progress', 'Resolved'];
+// SLA TRACKER: Added status states for escalation and citizen feedback flow
+const statuses = [
+  'Open',
+  'In Progress',
+  'Resolved',
+  'Escalated',
+  'Closed',
+  'Reopened',
+];
 
 const Issue = sequelize.define(
   'Issue',
@@ -81,6 +90,71 @@ const Issue = sequelize.define(
       allowNull: false,
       defaultValue: 'Open',
     },
+    // SLA TRACKER: AI-determined pothole severity
+    severity: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+      defaultValue: 'low',
+    },
+    // SLA TRACKER: Deadline by which the issue must be resolved
+    sla_deadline: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // SLA TRACKER: Whether this issue has been escalated due to SLA breach
+    escalated: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    // SLA TRACKER: Timestamp when the issue was escalated
+    escalated_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // SLA TRACKER: Timestamp when the issue was resolved
+    resolved_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // Citizen feedback: total number of reopen events
+    reopen_count: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    // Citizen feedback: photo uploaded by citizen while rejecting resolution
+    rejection_photo_url: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    // Citizen feedback: timestamp when citizen confirmed issue is fixed
+    confirmed_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // Citizen feedback: timestamp when citizen rejected a resolved issue
+    rejected_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // ESCALATION SYSTEM: currently assigned officer for this issue
+    assigned_to: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    // ESCALATION SYSTEM: 0=Field Engineer, 1=Zonal Officer, 2=Supervisor
+    escalation_level: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    // ESCALATION SYSTEM: human readable level label
+    escalation_label: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'Field Engineer',
+    },
   },
   {
     tableName: 'issues',
@@ -90,6 +164,11 @@ const Issue = sequelize.define(
     underscored: true,
   }
 );
+
+Issue.belongsTo(User, {
+  foreignKey: 'assigned_to',
+  as: 'assignedOfficer',
+});
 
 module.exports = {
   Issue,

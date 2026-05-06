@@ -1,275 +1,489 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  Box,
-  Typography,
-  Button,
-  CircularProgress,
   Alert,
+  Box,
+  Button,
   Chip,
-  Paper,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   IconButton,
-  Tooltip,
+  Paper,
+  Snackbar,
   Stack,
-  TextField,
+  Typography,
 } from "@mui/material";
 import { DataGrid } from "@mui/x-data-grid";
-import {
-  Visibility as ViewIcon,
-  Delete as DeleteIcon,
-} from "@mui/icons-material";
-import { useNavigate } from "react-router-dom";
-import { issuesAPI } from "../api/api";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import DeleteIcon from "@mui/icons-material/Delete";
+import { adminAPI, issuesAPI, default as api } from "../api/api";
+
+const designationLabels = {
+  field_engineer: "Field Engineer",
+  zonal_officer: "Zonal Officer",
+  supervisor: "Supervisor",
+};
+
+const levelMeta = {
+  0: { color: "primary", label: "Field Engineer" },
+  1: { color: "warning", label: "Zonal Officer" },
+  2: { color: "error", label: "Supervisor" },
+};
+
+const statusColor = (status) => {
+  switch (status) {
+    case "Open":
+      return "warning";
+    case "In Progress":
+      return "info";
+    case "Resolved":
+      return "success";
+    case "Escalated":
+      return "error";
+    default:
+      return "default";
+  }
+};
+
+const formatDateTime = (value) => {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const formatRemainingTime = (hours) => {
+  if (typeof hours !== "number") return "-";
+  if (hours < 0) return "Overdue";
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+
+  if (days > 0 && remainingHours > 0) {
+    return `${days}d ${remainingHours}h remaining`;
+  }
+  if (days > 0) {
+    return `${days}d remaining`;
+  }
+  return `${hours}h remaining`;
+};
+
+const SeverityChip = ({ value }) => {
+  const severity = (value || "low").toLowerCase();
+  return severity === "high" ? (
+    <Chip size="small" color="error" label="High" />
+  ) : (
+    <Chip size="small" color="success" label="Low" />
+  );
+};
+
+const SlaCell = ({ row }) => {
+  const deadlineText = formatDateTime(row.sla_deadline);
+  if (!deadlineText) return "";
+
+  if (row.is_overdue) {
+    return (
+      <Typography sx={{ color: "error.main", fontWeight: 700 }}>
+        {deadlineText} (Overdue)
+      </Typography>
+    );
+  }
+
+  if (
+    typeof row.time_remaining_hours === "number" &&
+    row.time_remaining_hours < 24 &&
+    row.time_remaining_hours >= 0
+  ) {
+    return (
+      <Typography sx={{ color: "warning.main", fontWeight: 600 }}>
+        {deadlineText} {`⚠️ ${row.time_remaining_hours}h left`}
+      </Typography>
+    );
+  }
+
+  return deadlineText;
+};
 
 const Dashboard = () => {
-  const navigate = useNavigate();
-  const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  const [issues, setIssues] = useState([]);
+  const [counts, setCounts] = useState({
+    level_0_count: 0,
+    level_1_count: 0,
+    level_2_count: 0,
+  });
+  const [levelFilter, setLevelFilter] = useState("all");
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    severity: "success",
+    message: "",
+  });
+  // RESOLUTION FLOW
+  const [resolveDialogOpen, setResolveDialogOpen] = useState(false);
+  const [resolveIssue, setResolveIssue] = useState(null);
+  const [resolutionFile, setResolutionFile] = useState(null);
+  const [resolutionPreview, setResolutionPreview] = useState("");
+  const [submittingResolution, setSubmittingResolution] = useState(false);
 
-  useEffect(() => {
-    fetchIssues();
-  }, []);
+  // VIEW ISSUE
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [viewIssue, setViewIssue] = useState(null);
+
+  // SUPERVISOR DELETE
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteIssue, setDeleteIssue] = useState(null);
+  const [deletingIssue, setDeletingIssue] = useState(false);
+
+  const designation = localStorage.getItem("designation") || "";
+  const isSupervisor = designation === "supervisor";
 
   const fetchIssues = async () => {
     try {
       setLoading(true);
       const response = await issuesAPI.getAll();
-      const issuesData = (
-        Array.isArray(response) ? response : response.issues || []
-      ).map((issue, index) => ({
-        ...issue,
-        index: index + 1,
-        created_at: issue.created_at || issue.createdAt,
-      }));
-      setIssues(issuesData);
+      const payload = Array.isArray(response)
+        ? { issues: response }
+        : { issues: response.issues || [], ...response };
+
+      setIssues(payload.issues || []);
+      setCounts({
+        level_0_count: payload.level_0_count || 0,
+        level_1_count: payload.level_1_count || 0,
+        level_2_count: payload.level_2_count || 0,
+      });
       setError("");
     } catch (err) {
-      setError(
-        err.response?.data?.message || err.message || "Failed to fetch issues"
-      );
+      setError(err.response?.data?.message || "Failed to fetch issues");
     } finally {
       setLoading(false);
     }
   };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case "Open":
-        return "warning";
-      case "In Progress":
-        return "info";
-      case "Resolved":
-        return "success";
-      default:
-        return "default";
+  useEffect(() => {
+    fetchIssues();
+  }, []);
+
+  // RESOLUTION FLOW
+  const handleOpenResolveDialog = (issue) => {
+    setResolveIssue(issue);
+    setResolutionFile(null);
+    setResolutionPreview("");
+    setResolveDialogOpen(true);
+  };
+
+  const handleCloseResolveDialog = () => {
+    setResolveDialogOpen(false);
+    setResolveIssue(null);
+    setResolutionFile(null);
+    setResolutionPreview("");
+  };
+
+  const handleResolutionFileChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    setResolutionFile(file);
+    if (file) {
+      const previewUrl = URL.createObjectURL(file);
+      setResolutionPreview(previewUrl);
+    } else {
+      setResolutionPreview("");
     }
   };
 
-  const [filterReviewOnly, setFilterReviewOnly] = useState(false);
+  const handleSubmitResolution = async () => {
+    if (!resolveIssue || !resolutionFile) return;
 
-  const columns = [
-    {
-      field: "thumb",
-      headerName: "",
-      width: 80,
-      sortable: false,
-      filterable: false,
-      renderCell: (params) => (
-        <img
-          src={
-            params.row.photo_url ||
-            params.row.resolved_photo_url ||
-            "https://images.unsplash.com/photo-1529429617124-aee711fa4eec?auto=format&fit=crop&w=200&q=60"
-          }
-          alt="thumb"
-          style={{ width: 56, height: 40, objectFit: "cover", borderRadius: 6 }}
-        />
-      ),
-    },
-    {
-      field: "index",
-      headerName: "#",
-      width: 60,
-      headerAlign: "center",
-      align: "center",
-      sortable: false,
-      filterable: false,
-    },
+    try {
+      setSubmittingResolution(true);
+      const formData = new FormData();
+      formData.append("status", "Resolved");
+      formData.append("image", resolutionFile);
+      const response = await api.patch(`/issues/${resolveIssue.id}`, formData);
+      const updated = response.data;
+
+      if (designation === "supervisor") {
+        setIssues((prev) =>
+          prev.map((issue) => (issue.id === resolveIssue.id ? { ...issue, ...updated } : issue))
+        );
+      } else {
+        setIssues((prev) => prev.filter((issue) => issue.id !== resolveIssue.id));
+      }
+
+      handleCloseResolveDialog();
+
+      setSnackbar({
+        open: true,
+        severity: "success",
+        message: "Issue resolved successfully",
+      });
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        severity: "error",
+        message: err.response?.data?.message || "Failed to update issue",
+      });
+    } finally {
+      setSubmittingResolution(false);
+    }
+  };
+
+  // VIEW ISSUE
+  const handleOpenViewDialog = (issue) => {
+    setViewIssue(issue);
+    setViewDialogOpen(true);
+  };
+
+  const handleCloseViewDialog = () => {
+    setViewDialogOpen(false);
+    setViewIssue(null);
+  };
+
+  // SUPERVISOR DELETE
+  const handleOpenDeleteDialog = (issue) => {
+    setDeleteIssue(issue);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleCloseDeleteDialog = () => {
+    setDeleteDialogOpen(false);
+    setDeleteIssue(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteIssue) return;
+
+    try {
+      setDeletingIssue(true);
+      await issuesAPI.delete(deleteIssue.id);
+      setIssues((prev) => prev.filter((issue) => issue.id !== deleteIssue.id));
+      handleCloseDeleteDialog();
+      setSnackbar({
+        open: true,
+        severity: "success",
+        message: "Issue deleted successfully",
+      });
+    } catch (err) {
+      const apiMessage = err.response?.data?.message;
+      setSnackbar({
+        open: true,
+        severity: "error",
+        message:
+          err.response?.status === 403
+            ? "Only supervisors can delete issues"
+            : apiMessage || "Failed to delete issue",
+      });
+    } finally {
+      setDeletingIssue(false);
+    }
+  };
+
+  const handleTriggerEscalation = async () => {
+    try {
+      const result = await adminAPI.triggerEscalation();
+      setSnackbar({
+        open: true,
+        severity: "success",
+        message: `Escalation check complete - ${result.escalated_count || 0} issues escalated`,
+      });
+      await fetchIssues();
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        severity: "error",
+        message: err.response?.data?.message || "Failed to trigger escalation",
+      });
+    }
+  };
+
+  // ROLE BASED VIEW: filter supervisor list by selected escalation level card
+  const filteredIssues = useMemo(() => {
+    if (designation !== "supervisor") {
+      return issues;
+    }
+
+    if (levelFilter === "all") {
+      return issues;
+    }
+
+    return issues.filter((issue) => issue.escalation_level === levelFilter);
+  }, [designation, issues, levelFilter]);
+
+  const nearDeadlineCount = useMemo(
+    () =>
+      issues.filter(
+        (i) =>
+          i.status !== "Resolved" &&
+          typeof i.time_remaining_hours === "number" &&
+          i.time_remaining_hours < 24 &&
+          i.time_remaining_hours >= 0
+      ).length,
+    [issues]
+  );
+
+  const level2Count = useMemo(
+    () => (designation === "supervisor" ? counts.level_2_count : 0),
+    [designation, counts]
+  );
+
+  const pageTitle = useMemo(() => {
+    if (designation === "field_engineer") return "My Assigned Issues";
+    if (designation === "zonal_officer") return "Escalated Issues - Level 1";
+    if (designation === "supervisor") return "All Issues - Full Overview";
+    return "Issues Dashboard";
+  }, [designation]);
+
+  const baseColumns = [
     {
       field: "id",
       headerName: "ID",
-      width: 80,
-      headerAlign: "center",
-      align: "center",
+      minWidth: 120,
+      flex: 0.8,
     },
     {
-      field: "title",
-      headerName: "Title",
-      // Reduce the title column width so it doesn't take up too much space
-      // and allow the actions column to remain visible.
-      width: 220,
-      flex: 0,
+      field: "description",
+      headerName: "Description",
+      minWidth: 250,
+      flex: 1.4,
+      valueGetter: (value, rowOrParams) => {
+        const row = rowOrParams?.row || rowOrParams || {};
+        return row.description || row.title || value || "";
+      },
+    },
+    {
+      field: "severity",
+      headerName: "Severity",
+      minWidth: 120,
+      flex: 0.6,
+      renderCell: (params) => <SeverityChip value={params.value} />,
+    },
+    {
+      field: "sla_deadline",
+      headerName: "SLA Deadline",
+      minWidth: 220,
+      flex: 1,
+      renderCell: (params) => <SlaCell row={params.row} />,
     },
     {
       field: "status",
       headerName: "Status",
-      width: 130,
-      headerAlign: "center",
-      align: "center",
+      minWidth: 150,
+      flex: 0.8,
       renderCell: (params) => (
-        <Chip
-          label={params.value}
-          color={getStatusColor(params.value)}
-          size="small"
-        />
-      ),
-    },
-    {
-      field: "needs_review",
-      headerName: "Review Status",
-      width: 130,
-      headerAlign: "center",
-      align: "center",
-      renderCell: (params) =>
-        params.value ? (
-          <Chip
-            label="Needs Review"
-            color="error"
-            size="small"
-            variant="outlined"
-          />
-        ) : (
-          <Chip
-            label="Verified"
-            color="success"
-            size="small"
-            variant="outlined"
-          />
-        ),
-    },
-    {
-      field: "ai_verified",
-      headerName: "AI Status",
-      width: 140,
-      headerAlign: "center",
-      align: "center",
-      renderCell: (params) => {
-        if (params.value === null || params.value === undefined) {
-          return (
-            <Chip
-              label="Not Checked"
-              color="default"
-              size="small"
-              variant="outlined"
-            />
-          );
-        }
-        return params.value ? (
-          <Chip label="✓ Pothole" color="success" size="small" />
-        ) : (
-          <Chip label="✗ No Pothole" color="error" size="small" />
-        );
-      },
-    },
-    {
-      field: "created_at",
-      headerName: "Created Date",
-      width: 150,
-      headerAlign: "center",
-      align: "center",
-      renderCell: (params) => {
-        const dateValue = params.row.created_at || params.row.createdAt;
-        if (!dateValue) return "";
-
-        try {
-          const date = new Date(dateValue);
-          if (isNaN(date.getTime())) return "";
-          return date.toLocaleString("en-US", {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          });
-        } catch (error) {
-          return "";
-        }
-      },
-    },
-    {
-      field: "actions",
-      headerName: "Actions",
-      // Make actions wider so both View and Delete buttons fit comfortably
-      // without wrapping or being hidden.
-      width: 180,
-      headerAlign: "center",
-      align: "center",
-      sortable: false,
-      renderCell: (params) => (
-        <Box sx={{ display: "flex", gap: 1 }}>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<ViewIcon />}
-            onClick={() => navigate(`/issue/${params.row.id}`)}
-          >
-            View
-          </Button>
-          <Button
-            variant="outlined"
-            color="error"
-            size="small"
-            startIcon={<DeleteIcon />}
-            onClick={async (e) => {
-              // Prevent row click propagation
-              e.stopPropagation();
-              const id = params.row.id;
-              const ok = window.confirm(
-                "Are you sure you want to delete this issue? This action cannot be undone."
-              );
-              if (!ok) return;
-              try {
-                setLoading(true);
-                await issuesAPI.delete(id);
-                // refresh list
-                await fetchIssues();
-                setError("");
-              } catch (err) {
-                setError(
-                  err.response?.data?.message ||
-                    err.message ||
-                    "Failed to delete issue"
-                );
-              } finally {
-                setLoading(false);
-              }
-            }}
-          >
-            Delete
-          </Button>
-        </Box>
+        <Chip size="small" color={statusColor(params.value)} label={params.value} />
       ),
     },
   ];
 
-  const filteredIssues = issues.filter((issue) => {
-    if (filterReviewOnly && !issue.needs_review) {
-      return false;
+  const actionColumn = {
+    field: "action",
+    headerName: "Action",
+    minWidth: 230,
+    flex: 0.8,
+    sortable: false,
+    renderCell: (params) => (
+      <Stack direction="row" spacing={1} alignItems="center">
+        {/* VIEW ISSUE */}
+        <IconButton
+          size="small"
+          color="primary"
+          onClick={() => handleOpenViewDialog(params.row)}
+        >
+          <VisibilityIcon fontSize="small" />
+        </IconButton>
+
+        <Button
+          size="small"
+          variant="contained"
+          color="success"
+          disabled={params.row.status === "Resolved"}
+          onClick={() => handleOpenResolveDialog(params.row)}
+        >
+          Mark Resolved
+        </Button>
+
+        {/* SUPERVISOR DELETE */}
+        {isSupervisor && (
+          <IconButton
+            size="small"
+            color="error"
+            onClick={() => handleOpenDeleteDialog(params.row)}
+          >
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        )}
+      </Stack>
+    ),
+  };
+
+  const columns = useMemo(() => {
+    if (designation === "field_engineer") {
+      return [
+        ...baseColumns.slice(0, 2),
+        {
+          field: "location",
+          headerName: "Location",
+          minWidth: 220,
+          flex: 1,
+          valueGetter: (value, rowOrParams) => {
+            const row = rowOrParams?.row || rowOrParams || {};
+            return row.address || value || "-";
+          },
+        },
+        ...baseColumns.slice(2),
+        actionColumn,
+      ];
     }
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      (issue.title || "").toLowerCase().includes(q) ||
-      (issue.description || "").toLowerCase().includes(q) ||
-      (issue.status || "").toLowerCase().includes(q) ||
-      (issue.address || "").toLowerCase().includes(q)
-    );
-  });
+
+    if (designation === "zonal_officer") {
+      return [
+        ...baseColumns,
+        {
+          field: "escalated_at",
+          headerName: "Escalated At",
+          minWidth: 220,
+          flex: 1,
+          renderCell: (params) => (
+            <Typography sx={{ color: "warning.main", fontWeight: 600 }}>
+              {formatDateTime(params.value)}
+            </Typography>
+          ),
+        },
+        actionColumn,
+      ];
+    }
+
+    if (designation === "supervisor") {
+      return [
+        ...baseColumns.slice(0, 4),
+        {
+          field: "escalation_level",
+          headerName: "Current Level",
+          minWidth: 170,
+          flex: 0.8,
+          renderCell: (params) => {
+            const meta = levelMeta[params.value] || { color: "default", label: "Unknown" };
+            return <Chip size="small" color={meta.color} label={meta.label} />;
+          },
+        },
+        baseColumns[4],
+        actionColumn,
+      ];
+    }
+
+    return [...baseColumns, actionColumn];
+  }, [designation, isSupervisor]);
 
   if (loading) {
     return (
-      <Box sx={{ display: "flex", justifyContent: "center", mt: 4 }}>
+      <Box sx={{ display: "flex", justifyContent: "center", mt: 8 }}>
         <CircularProgress />
       </Box>
     );
@@ -278,51 +492,21 @@ const Dashboard = () => {
   return (
     <Box sx={{ p: 3 }}>
       <Stack
-        direction="row"
-        alignItems="center"
+        direction={{ xs: "column", md: "row" }}
         justifyContent="space-between"
+        alignItems={{ xs: "flex-start", md: "center" }}
+        spacing={2}
         sx={{ mb: 2 }}
       >
         <Typography variant="h4" component="h1">
-          Issues Dashboard
+          {pageTitle}
         </Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <TextField
-            size="small"
-            placeholder="Search issues..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <Button
-            variant={filterReviewOnly ? "contained" : "outlined"}
-            color={filterReviewOnly ? "error" : "inherit"}
-            size="small"
-            onClick={() => setFilterReviewOnly(!filterReviewOnly)}
-          >
-            {filterReviewOnly
-              ? `Needs Review (${issues.filter((i) => i.needs_review).length})`
-              : "Show Needs Review"}
+
+        {designation === "supervisor" && (
+          <Button variant="contained" color="error" onClick={handleTriggerEscalation}>
+            Trigger Escalation
           </Button>
-          <Tooltip title="Refresh">
-            <IconButton onClick={fetchIssues}>
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  d="M21 12a9 9 0 10-2.53 6.06"
-                  stroke="#374151"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </IconButton>
-          </Tooltip>
-        </Stack>
+        )}
       </Stack>
 
       {error && (
@@ -331,38 +515,249 @@ const Dashboard = () => {
         </Alert>
       )}
 
-      <Paper sx={{ p: 2, borderRadius: 2, boxShadow: 2 }}>
-        <Box sx={{ height: 640, width: "100%" }}>
+      {designation === "field_engineer" && nearDeadlineCount > 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {nearDeadlineCount} issues approaching SLA deadline
+        </Alert>
+      )}
+
+      {designation === "zonal_officer" && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {issues.length} Level 1 escalations assigned to you
+        </Alert>
+      )}
+
+      {designation === "supervisor" && level2Count > 0 && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {level2Count} issues at Level 2 - Immediate action required
+        </Alert>
+      )}
+
+      {designation === "supervisor" && (
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
+          {[
+            { key: "all", label: "Total Issues", value: issues.length },
+            { key: 0, label: "Level 0", value: counts.level_0_count },
+            { key: 1, label: "Level 1", value: counts.level_1_count },
+            { key: 2, label: "Level 2", value: counts.level_2_count },
+          ].map((card) => (
+            <Paper
+              key={String(card.key)}
+              onClick={() => setLevelFilter(card.key)}
+              sx={{
+                p: 1.5,
+                minWidth: 140,
+                cursor: "pointer",
+                border: levelFilter === card.key ? "2px solid #1976d2" : "1px solid #e0e0e0",
+              }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                {card.label}
+              </Typography>
+              <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                {card.value}
+              </Typography>
+            </Paper>
+          ))}
+        </Stack>
+      )}
+
+      <Paper sx={{ p: 1.5 }}>
+        <Box sx={{ height: 660, width: "100%" }}>
           <DataGrid
-            rows={filteredIssues || []}
+            rows={filteredIssues}
             columns={columns}
-            pageSize={10}
-            rowsPerPageOptions={[10, 25, 50]}
-            disableSelectionOnClick
-            getRowId={(row) => row.id || row._id}
+            getRowId={(row) => row.id}
+            disableRowSelectionOnClick
+            pageSizeOptions={[10, 25, 50]}
             initialState={{
-              sorting: {
-                sortModel: [{ field: "created_at", sort: "desc" }],
+              pagination: {
+                paginationModel: { pageSize: 10, page: 0 },
               },
             }}
             sx={{
-              "& .MuiDataGrid-root": {
-                border: "none",
+              "& .row-level-1": {
+                borderLeft: "4px solid #ed6c02",
               },
-              "& .MuiDataGrid-cell": {
-                borderBottom: "1px solid #f0f0f0",
+              "& .row-level-2": {
+                borderLeft: "4px solid #d32f2f",
               },
-              "& .MuiDataGrid-columnHeaders": {
-                backgroundColor: "#f8f9fa",
-                borderBottom: "2px solid #e0e0e0",
-              },
-              "& .MuiDataGrid-row:hover": {
-                backgroundColor: "#fbfdff",
-              },
+            }}
+            getRowClassName={(params) => {
+              if (params.row.escalation_level === 1) return "row-level-1";
+              if (params.row.escalation_level === 2) return "row-level-2";
+              return "";
             }}
           />
         </Box>
       </Paper>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={3000}
+        onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+      >
+        <Alert
+          severity={snackbar.severity}
+          onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+          sx={{ width: "100%" }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+
+      {/* RESOLUTION FLOW */}
+      <Dialog
+        open={resolveDialogOpen}
+        onClose={handleCloseResolveDialog}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>{`Resolve Issue #${resolveIssue?.id || ""}`}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography>
+              Please upload a photo showing the resolved issue
+            </Typography>
+            <Button variant="outlined" component="label">
+              Upload Resolution Photo
+              <input
+                hidden
+                type="file"
+                accept="image/*"
+                onChange={handleResolutionFileChange}
+              />
+            </Button>
+            {resolutionFile && (
+              <Typography variant="body2">Selected: {resolutionFile.name}</Typography>
+            )}
+            {resolutionPreview && (
+              <Box
+                component="img"
+                src={resolutionPreview}
+                alt="Resolution preview"
+                sx={{ width: "100%", maxHeight: 260, objectFit: "cover", borderRadius: 1 }}
+              />
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseResolveDialog}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleSubmitResolution}
+            disabled={!resolutionFile || submittingResolution}
+          >
+            Submit Resolution
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* VIEW ISSUE */}
+      <Dialog open={viewDialogOpen} onClose={handleCloseViewDialog} maxWidth="md" fullWidth>
+        <DialogTitle>{`Issue Details #${viewIssue?.id || ""}`}</DialogTitle>
+        <DialogContent>
+          {viewIssue && (
+            <Stack spacing={1.2} sx={{ mt: 1 }}>
+              <Typography><strong>Issue ID:</strong> {viewIssue.id}</Typography>
+              <Typography><strong>Description:</strong> {viewIssue.description || "-"}</Typography>
+              <Typography>
+                <strong>Location:</strong> {viewIssue.latitude}, {viewIssue.longitude}
+                {viewIssue.address ? ` (${viewIssue.address})` : ""}
+              </Typography>
+              <Typography>
+                <strong>Reported Date:</strong> {formatDateTime(viewIssue.created_at)}
+              </Typography>
+              <Typography component="div">
+                <strong>Severity:</strong>{" "}
+                <SeverityChip value={viewIssue.severity} />
+              </Typography>
+              <Typography>
+                <strong>SLA Deadline:</strong> {formatDateTime(viewIssue.sla_deadline) || "-"}
+              </Typography>
+              <Typography component="div">
+                <strong>Status:</strong>{" "}
+                <Chip
+                  size="small"
+                  color={statusColor(viewIssue.status)}
+                  label={viewIssue.status}
+                />
+              </Typography>
+              <Typography>
+                <strong>Escalation:</strong> Level {viewIssue.escalation_level ?? 0} - {viewIssue.escalation_label || "Field Engineer"}
+              </Typography>
+              <Typography>
+                <strong>Assigned Officer:</strong> {viewIssue.assigned_to_name || "Unassigned"}
+              </Typography>
+              <Typography>
+                <strong>SLA State:</strong>{" "}
+                {viewIssue.is_overdue
+                  ? "Overdue"
+                  : typeof viewIssue.time_remaining_hours === "number"
+                  ? formatRemainingTime(viewIssue.time_remaining_hours)
+                  : "-"}
+              </Typography>
+              {viewIssue.photo_url && (
+                <Box>
+                  <Typography sx={{ mb: 0.5 }}><strong>Issue Photo:</strong></Typography>
+                  <Box
+                    component="img"
+                    src={viewIssue.photo_url}
+                    alt="Issue"
+                    sx={{ width: "100%", maxHeight: 320, objectFit: "contain", borderRadius: 1, backgroundColor: "#f5f5f5" }}
+                  />
+                </Box>
+              )}
+              {viewIssue.resolved_photo_url && (
+                <Box>
+                  <Typography sx={{ mb: 0.5 }}><strong>Resolved Photo:</strong></Typography>
+                  <Box
+                    component="img"
+                    src={viewIssue.resolved_photo_url}
+                    alt="Resolved"
+                    sx={{ width: "100%", maxHeight: 320, objectFit: "contain", borderRadius: 1, backgroundColor: "#f5f5f5" }}
+                  />
+                </Box>
+              )}
+              {viewIssue.rejection_photo_url && (
+                <Box>
+                  <Typography sx={{ mb: 0.5 }}><strong>Reopened Issue Photo:</strong></Typography>
+                  <Box
+                    component="img"
+                    src={viewIssue.rejection_photo_url}
+                    alt="Reopened issue"
+                    sx={{ width: "100%", maxHeight: 320, objectFit: "contain", borderRadius: 1, backgroundColor: "#f5f5f5" }}
+                  />
+                </Box>
+              )}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseViewDialog}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* SUPERVISOR DELETE */}
+      <Dialog open={deleteDialogOpen} onClose={handleCloseDeleteDialog} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete Issue</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete Issue #{deleteIssue?.id || ""}? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDeleteDialog}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={handleConfirmDelete}
+            disabled={deletingIssue}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

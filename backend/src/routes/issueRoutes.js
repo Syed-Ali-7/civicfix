@@ -4,11 +4,15 @@ const {
   createIssue,
   getIssues,
   getIssueById,
+  updateIssueStatus,
   updateIssue,
   deleteIssue,
+  testAIPipeline,
+  submitIssueFeedback,
 } = require('../controllers/issueController');
 const {
   authenticateToken,
+  optionalAuthenticateToken,
   authorizeRoles,
 } = require('../middleware/authMiddleware');
 const upload = require('../middleware/upload');
@@ -34,8 +38,8 @@ const createIssueValidation = [
     .withMessage('Longitude is invalid'),
   body('status')
     .optional()
-    .isIn(['Open', 'In Progress', 'Resolved'])
-    .withMessage('Status must be Open, In Progress, or Resolved'),
+    .isIn(['Open', 'In Progress', 'Resolved', 'Escalated', 'Closed', 'Reopened'])
+    .withMessage('Status must be Open, In Progress, Resolved, Escalated, Closed, or Reopened'),
 ];
 
 const updateIssueValidation = [
@@ -60,9 +64,17 @@ const updateIssueValidation = [
     .withMessage('Longitude is invalid'),
   body('status')
     .optional()
-    .isIn(['Open', 'In Progress', 'Resolved'])
-    .withMessage('Status must be Open, In Progress, or Resolved'),
+    .isIn(['Open', 'In Progress', 'Resolved', 'Escalated', 'Closed', 'Reopened'])
+    .withMessage('Status must be Open, In Progress, Resolved, Escalated, Closed, or Reopened'),
 ];
+
+// AI PIPELINE INTEGRATION — Protected test route (admin only, dev use)
+router.post(
+  '/test-ai',
+  authenticateToken,
+  authorizeRoles('admin'),
+  testAIPipeline
+);
 
 router.post(
   '/',
@@ -71,8 +83,43 @@ router.post(
   createIssueValidation,
   createIssue
 );
-router.get('/', getIssues);
+router.get('/', optionalAuthenticateToken, getIssues);
+
+router.post(
+  '/:id/feedback',
+  authenticateToken,
+  issueIdValidation,
+  upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'photo', maxCount: 1 },
+  ]),
+  submitIssueFeedback
+);
+
+router.patch(
+  '/:id/status',
+  authenticateToken,
+  authorizeRoles('staff', 'admin'),
+  issueIdValidation,
+  [
+    body('status')
+      .isIn(['Open', 'In Progress', 'Resolved', 'Escalated'])
+      .withMessage('Status must be Open, In Progress, Resolved, or Escalated'),
+  ],
+  updateIssueStatus
+);
+
 router.get('/:id', issueIdValidation, getIssueById);
+router.patch(
+  '/:id',
+  authenticateToken,
+  authorizeRoles('staff', 'admin'),
+  upload.single('image'),
+  issueIdValidation,
+  updateIssueValidation,
+  updateIssue
+);
+
 router.put(
   '/:id',
   authenticateToken,
@@ -85,7 +132,6 @@ router.put(
 router.delete(
   '/:id',
   authenticateToken,
-  authorizeRoles('admin'),
   issueIdValidation,
   deleteIssue
 );

@@ -4,14 +4,24 @@ import { Box } from '@mui/material';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import IssueDetails from './pages/IssueDetails';
+import DemoPage from './pages/DemoPage';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
 
 const ProtectedLayout = ({ children }) => {
   const navigate = useNavigate();
   const token = localStorage.getItem('admin_token');
+  const designation = localStorage.getItem('designation');
 
   if (!token) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (!designation) {
+    localStorage.removeItem('admin_token');
+    localStorage.removeItem('designation');
+    localStorage.removeItem('name');
+    localStorage.removeItem('role');
     return <Navigate to="/login" replace />;
   }
 
@@ -36,6 +46,15 @@ const ProtectedRoute = ({ element }) => {
   );
 };
 
+const SupervisorRoute = ({ element }) => {
+  const designation = localStorage.getItem('designation');
+  if (designation !== 'supervisor') {
+    return <Navigate to="/" replace />;
+  }
+
+  return <ProtectedRoute element={element} />;
+};
+
 function App() {
   return (
     <Router>
@@ -48,6 +67,11 @@ function App() {
         <Route 
           path="/issue/:id" 
           element={<ProtectedRoute element={<IssueDetails />} />} 
+        />
+        {/* DEMO CONTROLS */}
+        <Route
+          path="/demo"
+          element={<SupervisorRoute element={<DemoPage />} />}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

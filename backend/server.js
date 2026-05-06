@@ -5,8 +5,12 @@ const path = require('path');
 const authRoutes = require('./src/routes/authRoutes');
 const issueRoutes = require('./src/routes/issueRoutes');
 const aiRoutes = require('./src/routes/aiRoutes');
+const adminRoutes = require('./src/routes/adminRoutes');
+const demoRoutes = require('./src/routes/demoRoutes');
 const errorHandler = require('./src/middleware/errorHandler');
 const { connectDB, sequelize } = require('./src/config/db');
+// SLA TRACKER: Background service for SLA breach escalation
+const slaEscalationService = require('./src/services/slaEscalationService');
 
 dotenv.config();
 
@@ -15,7 +19,7 @@ const app = express();
 // Define CORS options
 const corsOptions = {
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
@@ -52,6 +56,9 @@ app.post('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/issues', issueRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/admin', adminRoutes);
+// DEMO CONTROLS
+app.use('/api/demo', demoRoutes);
 
 app.use(errorHandler);
 
@@ -61,6 +68,9 @@ const startServer = async () => {
   try {
     await connectDB();
     await sequelize.sync();
+
+    // SLA TRACKER: Start hourly escalation checks
+    slaEscalationService.start();
 
     app.listen(PORT, '0.0.0.0', () => {
       const os = require('os');

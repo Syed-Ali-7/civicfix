@@ -1,10 +1,13 @@
 const { validationResult } = require('express-validator');
-const { Issue, statuses } = require('../models');
+const { Op } = require('sequelize');
+const { Issue, User, statuses } = require('../models');
 const { reverseGeocode } = require('../utils/geocoding');
 const { computePHash, findSimilarImages } = require('../utils/phash');
-const { verifyPothole } = require('../utils/potholeDetectionAI');
+const { runAIPipeline } = require('../utils/aiPipelineService');
+const { calculateDistanceMeters } = require('../utils/distance');
 const logger = require('../utils/logger');
 const path = require('path');
+const fs = require('fs');
 
 // EXIF + geo distance validation
 // We use exiftool to read EXIF metadata from uploaded images (if present)
@@ -12,6 +15,25 @@ const path = require('path');
 const { ExifTool } = require('exiftool-vendored');
 const exiftool = new ExifTool({ taskTimeoutMillis: 5000 });
 const { getDistance } = require('geolib');
+
+const enrichIssue = (issueLike) => {
+  const data =
+    typeof issueLike.toJSON === 'function' ? issueLike.toJSON() : issueLike;
+  const now = new Date();
+
+  if (data.sla_deadline) {
+    const deadline = new Date(data.sla_deadline);
+    const diffMs = deadline - now;
+    data.time_remaining_hours = Math.round(diffMs / (1000 * 60 * 60));
+    data.is_overdue = diffMs < 0 && data.status !== 'Resolved';
+  } else {
+    data.time_remaining_hours = null;
+    data.is_overdue = false;
+  }
+
+  data.assigned_to_name = data.assignedOfficer?.name || null;
+  return data;
+};
 
 const createIssue = async (req, res, next) => {
   try {
@@ -75,55 +97,14 @@ const createIssue = async (req, res, next) => {
       needs_review = true;
     }
 
-    // ==================== AI POTHOLE VERIFICATION (RUN FIRST) ====================
-    // Run AI detection BEFORE EXIF validation to quickly reject non-pothole images
-    // This saves time on expensive metadata checks for obviously wrong images
+    // AI PIPELINE INTEGRATION — runs after EXIF + pHash checks (see below)
+    // Fields set by the pipeline; initialise safe defaults here
     let ai_verified = null;
     let ai_confidence = null;
     let ai_label = null;
-
-    if (req.file) {
-      try {
-        const uploadedPath =
-          req.file.path ||
-          path.join(__dirname, '../../uploads', req.file.filename);
-
-        const aiResult = await verifyPothole(uploadedPath);
-
-        ai_verified = aiResult.isPothole;
-        ai_confidence = aiResult.confidence;
-        ai_label = aiResult.label;
-
-        logger.debug('AI verification complete', {
-          isPothole: aiResult.isPothole,
-          confidence: aiResult.confidence,
-        });
-
-        if (!aiResult.isPothole) {
-          return res.status(400).json({
-            message:
-              'This does not appear to be a pothole or road damage. Please upload a photo of an actual pothole or road damage.',
-            ai_result: {
-              isPothole: false,
-              confidence: aiResult.confidence,
-              topPrediction: aiResult.topPrediction,
-              reason: aiResult.analysis?.hasRejectKeyword
-                ? 'Contains people/animals/indoor content'
-                : 'Not a road photo',
-            },
-          });
-        }
-      } catch (aiErr) {
-        // If AI verification fails, reject the upload with friendly message
-        console.warn('⚠️  AI verification failed:', aiErr.message);
-        return res.status(400).json({
-          message:
-            '⚠️  Could not verify image quality. Please try again with a clearer photo.',
-          error: aiErr.message,
-        });
-      }
-    }
-    // ====================================================================
+    let severity = 'low';
+    let sla_deadline = null;
+    let ai_message = null;
 
     // Reverse geocode coordinates to get address
     let address = null;
@@ -342,7 +323,7 @@ const createIssue = async (req, res, next) => {
         // Fetch all existing pHashes from the database
         const existingIssues = await Issue.findAll({
           attributes: ['id', 'phash'],
-          where: { phash: { [require('sequelize').Op.ne]: null } },
+          where: { phash: { [Op.ne]: null } },
         });
 
         // Find similar images (>= 85% similarity)
@@ -377,6 +358,66 @@ const createIssue = async (req, res, next) => {
       }
     }
 
+    // ==================== AI PIPELINE INTEGRATION ====================
+    // Run the Python AI pipeline (pothole detection + severity) AFTER all
+    // validation checks, so we only pay the cost for valid, non-duplicate images.
+    if (req.file) {
+      const uploadedPath =
+        req.file.path ||
+        path.join(__dirname, '../../uploads', req.file.filename);
+
+      // AI PIPELINE INTEGRATION — Step A: get absolute image path
+      const absoluteImagePath = path.resolve(uploadedPath);
+
+      // AI PIPELINE INTEGRATION — Step B: call pipeline
+      const aiResult = await runAIPipeline(absoluteImagePath);
+
+      // AI PIPELINE INTEGRATION — Step C: reject non-potholes
+      if (aiResult.success && aiResult.is_pothole === false) {
+        try {
+          await fs.promises.unlink(absoluteImagePath);
+        } catch (_) { /* ignore deletion errors */ }
+        return res.status(400).json({
+          success: false,
+          message: 'Submitted image does not appear to contain a pothole.',
+        });
+      }
+
+      // AI PIPELINE INTEGRATION — Step D: is_pothole true, save severity + deadline
+      if (aiResult.is_pothole !== false) {
+        ai_verified = true;
+        ai_confidence = aiResult.detection_confidence || null;
+        ai_label = 'pothole';
+        severity = aiResult.severity || 'low';
+        ai_message =
+          aiResult.message ||
+          (severity === 'high'
+            ? 'High severity pothole — SLA: 7 days'
+            : 'Low severity pothole — SLA: 15 days');
+
+        const sla_days = aiResult.sla_days || 15;
+        sla_deadline = new Date();
+        sla_deadline.setDate(sla_deadline.getDate() + sla_days);
+      }
+
+      // AI PIPELINE INTEGRATION — Step E: pipeline failure fallback
+      if (!aiResult.success) {
+        logger.info('[AI] Pipeline unavailable — using defaults');
+        ai_verified = true;
+        severity = 'low';
+        ai_message = 'AI pipeline unavailable — using defaults';
+        sla_deadline = new Date();
+        sla_deadline.setDate(sla_deadline.getDate() + 15);
+      }
+    } else {
+      // No file uploaded — set default SLA
+      severity = 'low';
+      ai_message = 'No image uploaded — default SLA applied';
+      sla_deadline = new Date();
+      sla_deadline.setDate(sla_deadline.getDate() + 15);
+    }
+    // =================================================================
+
     const issue = await Issue.create({
       title,
       description,
@@ -387,13 +428,42 @@ const createIssue = async (req, res, next) => {
       status,
       needs_review: false, // Only valid potholes reach here
       phash,
-      ai_verified: ai_verified !== null ? ai_verified : true, // If no AI check, assume verified
+      ai_verified: ai_verified !== null ? ai_verified : true,
       ai_confidence: ai_confidence,
       ai_label: ai_label || 'pothole',
+      // SLA TRACKER: persist AI-determined severity + deadline
+      severity,
+      sla_deadline,
     });
+
+    // ESCALATION SYSTEM: assign freshly created issue to a field engineer
+    const fieldEngineer = await User.findOne({
+      where: { designation: 'field_engineer' },
+    });
+
+    if (fieldEngineer) {
+      await issue.update({
+        assigned_to: fieldEngineer.id,
+        escalation_level: 0,
+        escalation_label: 'Field Engineer',
+      });
+      const refreshed = await Issue.findByPk(issue.id);
+      console.log('[VERIFY] assigned_to in DB:', refreshed.assigned_to);
+      console.log(
+        `[ASSIGN] Issue #${issue.id} assigned to Field Engineer ${fieldEngineer.name}`
+      );
+    } else {
+      console.log('[ASSIGN] No field engineer found');
+    }
     
-    logger.success('Issue created', { id: issue.id });
-    return res.status(201).json(issue);
+    logger.success('Issue created', { id: issue.id, severity, sla_deadline });
+    return res.status(201).json({
+      ...issue.toJSON(),
+      // AI PIPELINE INTEGRATION: return AI fields in response
+      severity,
+      sla_deadline,
+      ai_message,
+    });
   } catch (error) {
     logger.error('CREATE ISSUE ERROR', {
       message: error.message,
@@ -405,8 +475,69 @@ const createIssue = async (req, res, next) => {
 
 const getIssues = async (req, res, next) => {
   try {
-    const issues = await Issue.findAll({ order: [['created_at', 'DESC']] });
-    return res.json(issues);
+    const include = [
+      {
+        model: User,
+        as: 'assignedOfficer',
+        attributes: ['id', 'name', 'email', 'designation'],
+        required: false,
+      },
+    ];
+
+    // Keep citizen/mobile feed behavior when no authenticated user is present.
+    if (!req.user) {
+      const publicIssues = await Issue.findAll({
+        include,
+        order: [['created_at', 'DESC']],
+      });
+      return res.json(publicIssues.map(enrichIssue));
+    }
+
+    const role = req.user.role;
+    const designation = req.user.designation;
+    const userId = req.user.userId;
+
+    if (role === 'citizen' || !designation || role !== 'admin') {
+      const allIssues = await Issue.findAll({
+        include,
+        order: [['created_at', 'DESC']],
+      });
+      return res.json(allIssues.map(enrichIssue));
+    }
+
+    // ESCALATION SYSTEM: designation-based issue visibility
+    const where = {};
+
+    if (designation === 'field_engineer') {
+      where.escalation_level = 0;
+      where.assigned_to = userId;
+    } else if (designation === 'zonal_officer') {
+      where.escalation_level = 1;
+      where.assigned_to = userId;
+    } else if (designation !== 'supervisor') {
+      return res.status(403).json({
+        message: 'Forbidden: invalid designation for dashboard access',
+      });
+    }
+
+    const issues = await Issue.findAll({
+      where,
+      include,
+      order: [['created_at', 'DESC']],
+    });
+
+    const enriched = issues.map(enrichIssue);
+
+    if (designation === 'supervisor') {
+      return res.json({
+        issues: enriched,
+        level_0_count: enriched.filter((i) => i.escalation_level === 0).length,
+        level_1_count: enriched.filter((i) => i.escalation_level === 1).length,
+        level_2_count: enriched.filter((i) => i.escalation_level === 2).length,
+      });
+    }
+
+    return res.json(enriched);
   } catch (error) {
     return next(error);
   }
@@ -419,10 +550,51 @@ const getIssueById = async (req, res, next) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const issue = await Issue.findByPk(req.params.id);
+    const issue = await Issue.findByPk(req.params.id, {
+      include: [
+        {
+          model: User,
+          as: 'assignedOfficer',
+          attributes: ['id', 'name', 'email', 'designation'],
+          required: false,
+        },
+      ],
+    });
     if (!issue) {
       return res.status(404).json({ message: 'Issue not found' });
     }
+
+    return res.json(enrichIssue(issue));
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const updateIssueStatus = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { status } = req.body || {};
+    const issue = await Issue.findByPk(id);
+
+    if (!issue) {
+      return res.status(404).json({ message: 'Issue not found' });
+    }
+
+    if (!statuses.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status provided' });
+    }
+
+    const updates = { status };
+    if (status === 'Resolved' && !issue.resolved_at) {
+      updates.resolved_at = new Date();
+    }
+
+    await issue.update(updates);
     return res.json(issue);
   } catch (error) {
     return next(error);
@@ -504,6 +676,11 @@ const updateIssue = async (req, res, next) => {
       return res.status(400).json({ message: 'Invalid status provided' });
     }
 
+    // SLA TRACKER: Track resolution timestamp when issue is resolved
+    if (updates.status === 'Resolved' && !issue.resolved_at) {
+      updates.resolved_at = new Date();
+    }
+
     await issue.update(updates);
     return res.json(issue);
   } catch (error) {
@@ -516,6 +693,13 @@ const deleteIssue = async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
+    }
+
+    // SUPERVISOR DELETE: only supervisor designation can delete issues
+    if (req.user.designation !== 'supervisor') {
+      return res.status(403).json({
+        message: 'Only supervisors can delete issues',
+      });
     }
 
     const { id } = req.params;
@@ -531,10 +715,149 @@ const deleteIssue = async (req, res, next) => {
   }
 };
 
+/**
+ * AI PIPELINE INTEGRATION — Protected test route
+ * POST /api/issues/test-ai  (admin only, dev use)
+ * Body: { imagePath: "/absolute/path/to/image.jpg" }
+ */
+const testAIPipeline = async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    let { imagePath } = body;
+
+    // AI PIPELINE INTEGRATION: fallback sample image for development testing
+    if (!imagePath) {
+      const uploadsDir = path.join(__dirname, '../../uploads');
+      const files = await fs.promises.readdir(uploadsDir);
+      const sample = files.find((f) => /\.(jpg|jpeg|png|bmp)$/i.test(f));
+      if (!sample) {
+        return res.status(404).json({
+          message:
+            'No sample image found in backend/uploads. Pass imagePath in request body.',
+        });
+      }
+      imagePath = path.join(uploadsDir, sample);
+    }
+
+    const result = await runAIPipeline(path.resolve(imagePath));
+    return res.json({ imagePath, result });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const submitIssueFeedback = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { status, latitude, longitude } = req.body || {};
+    const feedbackFile =
+      req.file ||
+      req.files?.image?.[0] ||
+      req.files?.photo?.[0] ||
+      null;
+
+    const issue = await Issue.findByPk(id);
+    if (!issue) {
+      return res.status(404).json({ message: 'Issue not found' });
+    }
+
+    if (status === 'confirmed') {
+      await issue.update({
+        status: 'Closed',
+        confirmed_at: new Date(),
+      });
+
+      return res.json({
+        success: true,
+        message: 'Thank you for confirming. Issue is now closed.',
+        issue,
+      });
+    }
+
+    if (status !== 'rejected') {
+      return res.status(400).json({
+        message: 'Invalid feedback status. Use confirmed or rejected.',
+      });
+    }
+
+    const userLat = parseFloat(latitude);
+    const userLon = parseFloat(longitude);
+    if (isNaN(userLat) || isNaN(userLon)) {
+      return res.status(400).json({
+        message: 'Valid latitude and longitude are required for rejection.',
+      });
+    }
+
+    const distanceMeters = calculateDistanceMeters(
+      { latitude: issue.latitude, longitude: issue.longitude },
+      { latitude: userLat, longitude: userLon }
+    );
+
+    if (distanceMeters > 100) {
+      return res.status(400).json({
+        message: 'You must be near the issue location',
+      });
+    }
+
+    if (!feedbackFile) {
+      return res.status(400).json({
+        message: 'Please upload a new photo for rejection feedback.',
+      });
+    }
+
+    const zonalOfficer = await User.findOne({
+      where: { designation: 'zonal_officer' },
+      order: [['created_at', 'ASC']],
+    });
+
+    if (!zonalOfficer) {
+      return res.status(404).json({ message: 'No zonal officer found' });
+    }
+
+    let host = req.get('host');
+    if (process.env.API_HOST) {
+      host = process.env.API_HOST;
+    }
+    const protocol =
+      process.env.API_PROTOCOL ||
+      req.protocol ||
+      req.headers['x-forwarded-proto'] ||
+      'http';
+    const rejectionPhotoUrl = `${protocol}://${host}/uploads/${feedbackFile.filename}`;
+
+    const now = new Date();
+    const newDeadline = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    await issue.update({
+      status: 'Reopened',
+      reopen_count: Number(issue.reopen_count || 0) + 1,
+      rejection_photo_url: rejectionPhotoUrl,
+      rejected_at: now,
+      escalation_level: 1,
+      escalation_label: 'Zonal Officer',
+      assigned_to: zonalOfficer.id,
+      escalated: true,
+      escalated_at: now,
+      sla_deadline: newDeadline,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Issue reopened and escalated to Zonal Officer.',
+      issue,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 module.exports = {
   createIssue,
   getIssues,
   getIssueById,
+  updateIssueStatus,
   updateIssue,
   deleteIssue,
+  testAIPipeline,
+  submitIssueFeedback,
 };

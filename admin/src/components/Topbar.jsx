@@ -4,25 +4,36 @@ import {
   Toolbar,
   Typography,
   Box,
+  Chip,
+  Button,
 } from '@mui/material';
 import { AccountCircle } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 
 const Topbar = () => {
-  // Decode email from token (basic JWT decode)
-  const getUserEmail = () => {
-    try {
-      const token = localStorage.getItem('admin_token');
-      if (token) {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        return payload.email || 'Officer';
-      }
-    } catch (error) {
-      console.error('Error decoding token:', error);
-    }
-    return 'Officer';
+  const navigate = useNavigate();
+
+  const designation = localStorage.getItem('designation') || '';
+  const officerName = localStorage.getItem('name') || 'Officer';
+
+  const designationMeta = {
+    field_engineer: { color: 'primary', label: 'Field Engineer' },
+    zonal_officer: { color: 'warning', label: 'Zonal Officer' },
+    supervisor: { color: 'error', label: 'Supervisor' },
   };
 
-  const userEmail = getUserEmail();
+  const chipMeta = designationMeta[designation] || {
+    color: 'default',
+    label: 'Unknown',
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('admin_token');
+    localStorage.removeItem('designation');
+    localStorage.removeItem('name');
+    localStorage.removeItem('role');
+    navigate('/login');
+  };
 
   return (
     <AppBar
@@ -40,10 +51,19 @@ const Topbar = () => {
           CivicFix Officer Panel
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Chip
+            color={chipMeta.color}
+            size="small"
+            label={chipMeta.label}
+            variant="outlined"
+          />
           <AccountCircle sx={{ color: 'primary.main' }} />
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-            {userEmail}
+          <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+            {officerName}
           </Typography>
+          <Button size="small" variant="outlined" onClick={handleLogout}>
+            Logout
+          </Button>
         </Box>
       </Toolbar>
     </AppBar>

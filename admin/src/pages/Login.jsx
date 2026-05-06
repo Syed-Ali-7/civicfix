@@ -47,7 +47,18 @@ const Login = () => {
 
     try {
       const response = await adminAuth.login(formData.email, formData.password);
+
+      if (!response?.user?.designation) {
+        setError(
+          "Access denied: officer designation is missing. Contact administrator."
+        );
+        return;
+      }
+
       localStorage.setItem("admin_token", response.token);
+      localStorage.setItem("designation", response.user.designation);
+      localStorage.setItem("name", response.user.name || "Officer");
+      localStorage.setItem("role", response.user.role || "staff");
       navigate("/");
     } catch (err) {
       setError(

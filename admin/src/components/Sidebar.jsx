@@ -12,6 +12,7 @@ import {
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
+  Science as ScienceIcon,
   Logout as LogoutIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -21,6 +22,7 @@ const drawerWidth = 250;
 const Sidebar = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const designation = localStorage.getItem('designation');
 
   const handleLogout = () => {
     localStorage.removeItem('admin_token');
@@ -33,6 +35,16 @@ const Sidebar = () => {
       icon: <DashboardIcon />,
       path: '/',
     },
+    // DEMO CONTROLS
+    ...(designation === 'supervisor'
+      ? [
+          {
+            text: 'Demo Controls',
+            icon: <ScienceIcon />,
+            path: '/demo',
+          },
+        ]
+      : []),
     {
       text: 'Logout',
       icon: <LogoutIcon />,

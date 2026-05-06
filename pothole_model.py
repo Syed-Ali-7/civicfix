@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 CivicFix - Custom Pothole Detection Model
-Built from scratch using Python and TensorFlow/Keras
-Optimized for quick training and high accuracy
+Built using Python and TensorFlow/Keras with MobileNetV2 Transfer Learning
+Optimized for high accuracy with fine-tuning and optimal threshold selection
 """
 
 import os
@@ -14,6 +14,7 @@ from tensorflow import keras
 from tensorflow.keras import layers, models
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score
 import cv2
 from pathlib import Path
 import json
@@ -31,70 +32,43 @@ class PotholeDetectionModel:
         self.model_path = model_path
         self.model = None
         self.history = None
+        # PHASE 2 UPGRADE: Default threshold, will be optimized after training
+        self.threshold = 0.5
         
+    # PHASE 2 UPGRADE: Replaced custom CNN with MobileNetV2 transfer learning for higher accuracy
     def build_model(self):
-        """Build CNN architecture from scratch"""
-        print("[BUILD] Building custom CNN architecture...")
+        """Build MobileNetV2 transfer learning architecture"""
+        print("[BUILD] Building MobileNetV2 transfer learning architecture...")
         
-        model = models.Sequential([
-            # Input layer
-            layers.Input(shape=(IMG_SIZE, IMG_SIZE, 3)),
-            
-            # Normalization
-            layers.Rescaling(1./255),
-            
-            # Enhanced data augmentation for diverse indoor/outdoor surfaces
-            layers.RandomFlip("horizontal"),  # Only horizontal flip (don't distort potholes)
-            layers.RandomRotation(0.15),  # Reduced from 0.2
-            layers.RandomZoom(0.15),  # Reduced from 0.2
-            
-            # First block
-            layers.Conv2D(32, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.Conv2D(32, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D((2, 2)),
-            layers.Dropout(0.3),
-            
-            # Second block
-            layers.Conv2D(64, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.Conv2D(64, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D((2, 2)),
-            layers.Dropout(0.3),
-            
-            # Third block
-            layers.Conv2D(128, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.Conv2D(128, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D((2, 2)),
-            layers.Dropout(0.4),
-            
-            # Fourth block
-            layers.Conv2D(256, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.Conv2D(256, (3, 3), padding='same', activation='relu'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D((2, 2)),
-            layers.Dropout(0.4),
-            
-            # Global pooling
-            layers.GlobalAveragePooling2D(),
-            
-            # Dense layers
-            layers.Dense(512, activation='relu'),
-            layers.BatchNormalization(),
-            layers.Dropout(0.5),
-            
-            layers.Dense(256, activation='relu'),
-            layers.BatchNormalization(),
-            layers.Dropout(0.4),
-            
-            # Output layer
-            layers.Dense(1, activation='sigmoid')
-        ])
+        # Load pre-trained MobileNetV2 (frozen)
+        base_model = tf.keras.applications.MobileNetV2(
+            weights='imagenet',
+            include_top=False,
+            input_shape=(IMG_SIZE, IMG_SIZE, 3)
+        )
+        base_model.trainable = False
+        base_model._name = 'mobilenetv2'
+        
+        # Data augmentation layer (separate, active only during training)
+        data_augmentation = models.Sequential([
+            layers.RandomFlip("horizontal"),
+            layers.RandomRotation(0.1),
+            layers.RandomZoom(0.1),
+            layers.RandomBrightness(0.2),
+        ], name='data_augmentation')
+        
+        # Build model using Functional API
+        inputs = layers.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
+        x = data_augmentation(inputs)
+        x = tf.keras.applications.mobilenet_v2.preprocess_input(x)  # scales to [-1, 1]
+        x = base_model(x, training=False)
+        x = layers.GlobalAveragePooling2D()(x)
+        x = layers.Dense(128, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.3)(x)
+        outputs = layers.Dense(1, activation='sigmoid')(x)
+        
+        model = keras.Model(inputs, outputs)
         
         # Compile model
         optimizer = keras.optimizers.Adam(learning_rate=LEARNING_RATE)
@@ -110,6 +84,7 @@ class PotholeDetectionModel:
         self.model = model
         print("[OK] Model built successfully!")
         print(f"[INFO] Total parameters: {model.count_params():,}")
+        print(f"[INFO] Trainable parameters: {sum(p.numpy().size for p in model.trainable_weights):,}")
         return model
     
     def load_images_from_folder(self, folder_path, label):
@@ -214,11 +189,10 @@ class PotholeDetectionModel:
         X_val, y_val = val_data
         X_test, y_test = test_data
         
-        # Calculate class weights to handle imbalance
-        # More non-potholes, so give potholes higher weight
+        # PHASE 2 UPGRADE: Fixed class_weight formula — higher weight to minority class (potholes)
         n_potholes = np.sum(y_train)
         n_non_potholes = len(y_train) - n_potholes
-        class_weight = {0: n_potholes / n_non_potholes, 1: 1.0}
+        class_weight = {0: 1.0, 1: n_non_potholes / n_potholes}
         print(f"\n[INFO] Class weights: {class_weight}")
         
         # Build model if not already built
@@ -244,7 +218,7 @@ class PotholeDetectionModel:
         )
         
         # Train
-        print("\n[TRAIN] Training model...")
+        print("\n[TRAIN] Training model (Phase 1: frozen base)...")
         self.history = self.model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
@@ -254,6 +228,10 @@ class PotholeDetectionModel:
             class_weight=class_weight,  # Handle class imbalance
             verbose=1
         )
+        
+        # PHASE 2 UPGRADE: Fine-tune top layers of MobileNetV2 then find optimal threshold
+        self.fine_tune(X_train, y_train, X_val, y_val)
+        self.threshold = self.find_optimal_threshold(X_val, y_val)
         
         # Evaluate on test set
         print("\n[EVAL] Evaluating on test set...")
@@ -272,6 +250,81 @@ class PotholeDetectionModel:
         self.save_model(test_acc, test_precision, test_recall)
         
         return True
+    
+    # PHASE 2 UPGRADE: Fine-tune top layers of MobileNetV2 for domain-specific features
+    def fine_tune(self, X_train, y_train, X_val, y_val):
+        """Unfreeze top layers of MobileNetV2 and fine-tune with low learning rate"""
+        print("\n[TRAIN] Starting fine-tuning (Phase 2: unfreezing top layers)...")
+        
+        # Get the MobileNetV2 base model by name
+        base_model = self.model.get_layer('mobilenetv2_1.00_224')
+        base_model.trainable = True
+        
+        # Freeze all layers except the last 30
+        for layer in base_model.layers[:-30]:
+            layer.trainable = False
+        
+        trainable_count = sum(1 for layer in base_model.layers if layer.trainable)
+        print(f"[INFO] Unfroze {trainable_count} layers for fine-tuning")
+        
+        # Recompile with very low learning rate
+        self.model.compile(
+            optimizer=keras.optimizers.Adam(learning_rate=1e-5),
+            loss='binary_crossentropy',
+            metrics=['accuracy',
+                    keras.metrics.Precision(name='precision'),
+                    keras.metrics.Recall(name='recall'),
+                    keras.metrics.AUC(name='auc')]
+        )
+        
+        # Fine-tune callbacks
+        early_stop = keras.callbacks.EarlyStopping(
+            monitor='val_auc',
+            patience=5,
+            restore_best_weights=True,
+            mode='max'
+        )
+        
+        reduce_lr = keras.callbacks.ReduceLROnPlateau(
+            monitor='val_auc',
+            factor=0.3,
+            patience=3,
+            min_lr=1e-8,
+            mode='max'
+        )
+        
+        self.model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=15,
+            batch_size=BATCH_SIZE,
+            callbacks=[early_stop, reduce_lr],
+            verbose=1
+        )
+        
+        print("[OK] Fine-tuning complete!")
+    
+    # PHASE 2 UPGRADE: Dynamically find optimal classification threshold using F1 score
+    def find_optimal_threshold(self, X_val, y_val):
+        """Find the threshold that maximizes F1 score on validation data"""
+        print("\n[THRESHOLD] Searching for optimal classification threshold...")
+        
+        y_pred = self.model.predict(X_val, verbose=0).flatten()
+        
+        best_thresh = 0.5
+        best_f1 = 0.0
+        
+        for thresh_int in range(30, 81, 5):
+            thresh = thresh_int / 100.0
+            y_binary = (y_pred > thresh).astype(int)
+            f1 = f1_score(y_val, y_binary, zero_division=0)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thresh = thresh
+        
+        print(f"[THRESHOLD] Optimal: {best_thresh:.2f} (F1: {best_f1:.4f})")
+        self.threshold = best_thresh
+        return best_thresh
     
     def save_model(self, accuracy, precision, recall):
         """Save trained model using native Keras format"""
@@ -302,7 +355,8 @@ class PotholeDetectionModel:
             'test_accuracy': float(accuracy),
             'test_precision': float(precision),
             'test_recall': float(recall),
-            'architecture': 'Custom CNN (4 conv blocks + data augmentation)'
+            'optimal_threshold': float(self.threshold),
+            'architecture': 'MobileNetV2 Transfer Learning + Fine-tuning'
         }
         
         metadata_path = keras_path.replace('.keras', '_metadata.json')
@@ -316,6 +370,13 @@ class PotholeDetectionModel:
         if os.path.exists(self.model_path):
             print(f"[LOAD] Loading model from: {self.model_path}")
             self.model = keras.models.load_model(self.model_path)
+            metadata_path = self.model_path.replace('.keras', '_metadata.json')
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                self.threshold = metadata.get('optimal_threshold', 0.5)
+                print(f"[OK] Threshold restored: {self.threshold}")
+                
             print("[OK] Model loaded successfully!")
             return True
         else:
@@ -340,7 +401,8 @@ class PotholeDetectionModel:
         # Predict
         prediction = self.model.predict(np.array([img]), verbose=0)
         confidence = float(prediction[0][0])
-        is_pothole = confidence > 0.65  # Optimized threshold to reduce false positives on indoor surfaces
+        # PHASE 2 UPGRADE: Use dynamically optimized threshold instead of hardcoded value
+        is_pothole = confidence > getattr(self, 'threshold', 0.5)
         
         return {
             'is_pothole': is_pothole,

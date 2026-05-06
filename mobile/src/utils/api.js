@@ -6,7 +6,7 @@ let API_BASE_URL;
 
 if (__DEV__) {
   // Development mode: Direct connection to backend IP
-  API_BASE_URL = "http://192.168.1.7:5000";
+  API_BASE_URL = "http://10.100.20.110:5000";
   console.log("🌐 Backend at:", API_BASE_URL);
 } else {
   API_BASE_URL =

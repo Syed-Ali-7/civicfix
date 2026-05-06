@@ -32,6 +32,9 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem("admin_token");
+      localStorage.removeItem("designation");
+      localStorage.removeItem("name");
+      localStorage.removeItem("role");
       window.location.href = "/login";
     }
     return Promise.reject(error);
@@ -57,7 +60,7 @@ export const issuesAPI = {
     return response.data;
   },
   updateStatus: async (id, status) => {
-    const response = await api.put(`/issues/${id}`, { status });
+    const response = await api.patch(`/issues/${id}/status`, { status });
     return response.data;
   },
   delete: async (id) => {
@@ -76,6 +79,13 @@ export const issuesAPI = {
     });
 
     const response = await api.put(`/issues/${id}`, formData);
+    return response.data;
+  },
+};
+
+export const adminAPI = {
+  triggerEscalation: async () => {
+    const response = await api.post('/admin/trigger-escalation');
     return response.data;
   },
 };
