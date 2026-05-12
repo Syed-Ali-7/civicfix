@@ -31,7 +31,7 @@ const ProfileScreen = () => {
           {user?.name}
         </Text>
         <Text variant="bodyMedium" style={styles.email}>
-          {user?.email}
+          {user?.email || '-'}
         </Text>
         <Text variant="bodySmall" style={styles.role}>
           Role · {user?.role || 'citizen'}

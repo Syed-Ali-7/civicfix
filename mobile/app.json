@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "CivicFix",
+    "slug": "civicfix",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -19,7 +19,13 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "permissions": ["ACCESS_FINE_LOCATION"]
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "package": "com.syedali.civicfix"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -37,10 +43,21 @@
         {
           "locationWhenInUsePermission": "Allow CivicFix to access your location to pin issues near you."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#C0392B",
+          "sounds": []
+        }
       ]
     ],
     "extra": {
-      "apiUrl": "http://192.168.x.x:5000/api"
+      "apiUrl": "https://civicfix-backend-qbmn.onrender.com/api",
+      "eas": {
+        "projectId": "cca0693e-8a7e-4786-a214-57fb540befff"
+      }
     }
   }
 }

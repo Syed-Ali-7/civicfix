@@ -5,8 +5,8 @@ import { Card, Text, Chip } from "react-native-paper";
 
 const STATUS_COLORS = {
   Open: "#f97316",
-  "In Progress": "#eab308",
   Resolved: "#22c55e",
+  Escalated: "#ef4444",
 };
 
 const IssueCard = ({ issue, onPress }) => {

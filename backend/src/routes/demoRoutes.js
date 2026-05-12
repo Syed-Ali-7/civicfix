@@ -4,6 +4,7 @@ const {
   authorizeRoles,
 } = require('../middleware/authMiddleware');
 const { Issue, User } = require('../models');
+const { sendEscalationEmail } = require('../services/emailService');
 
 const router = express.Router();
 
@@ -21,7 +22,7 @@ router.use((req, res, next) => {
   return next();
 });
 
-// DEMO CONTROLS: reset issue back to Level 0 baseline
+// DEMO CONTROLS: reset issue back to Level 1 baseline
 router.post('/reset-issue', async (req, res, next) => {
   try {
     const { issueId } = req.body || {};
@@ -34,37 +35,37 @@ router.post('/reset-issue', async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Issue not found' });
     }
 
-    const fieldEngineer = await User.findOne({
-      where: { designation: 'field_engineer' },
-      order: [['created_at', 'ASC']],
+    const level1Officer = await User.findOne({
+      where: { email: 'officer1@example.com' },
     });
 
-    if (!fieldEngineer) {
+    if (!level1Officer) {
       return res.status(404).json({
         success: false,
-        message: 'No field engineer found',
+        message: 'No level 1 officer found',
       });
     }
 
     const now = new Date();
+    const severity = (issue.severity || 'low').toLowerCase() === 'high' ? 'high' : 'low';
     const deadline = new Date(now);
-    deadline.setDate(deadline.getDate() + 7);
+    deadline.setDate(deadline.getDate() + (severity === 'high' ? 7 : 15));
 
     await issue.update({
-      escalation_level: 0,
-      escalation_label: 'Field Engineer',
-      assigned_to: fieldEngineer.id,
+      escalation_level: 1,
+      escalation_label: 'Level 1',
+      assigned_to: level1Officer.id,
       escalated: false,
       escalated_at: null,
       status: 'Open',
-      severity: 'high',
+      severity,
       created_at: now,
       sla_deadline: deadline,
     });
 
     return res.json({
       success: true,
-      message: 'Issue reset to Level 0',
+      message: 'Issue reset to Level 1',
       issue,
     });
   } catch (error) {
@@ -76,10 +77,10 @@ router.post('/reset-issue', async (req, res, next) => {
 router.post('/simulate-breach', async (req, res, next) => {
   try {
     const { issueId, day } = req.body || {};
-    if (!issueId || ![5, 7].includes(Number(day))) {
+    if (!issueId || ![7, 15].includes(Number(day))) {
       return res.status(400).json({
         success: false,
-        message: 'issueId and day (5 or 7) are required',
+        message: 'issueId and day (7 or 15) are required',
       });
     }
 
@@ -90,70 +91,48 @@ router.post('/simulate-breach', async (req, res, next) => {
 
     const now = new Date();
 
-    if (Number(day) === 5) {
-      const zonalOfficer = await User.findOne({
-        where: { designation: 'zonal_officer' },
-        order: [['created_at', 'ASC']],
-      });
-
-      if (!zonalOfficer) {
-        return res.status(404).json({
-          success: false,
-          message: 'No zonal officer found',
-        });
-      }
-
-      const createdAt = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
-      const deadline = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
-
-      await issue.update({
-        created_at: createdAt,
-        sla_deadline: deadline,
-        severity: 'high',
-        escalation_level: 1,
-        escalation_label: 'Zonal Officer',
-        assigned_to: zonalOfficer.id,
-        escalated: true,
-        escalated_at: now,
-        status: 'Escalated',
-      });
-
-      return res.json({
-        success: true,
-        message: 'Day 5 simulated — assigned to Zonal Officer',
-      });
-    }
-
-    const supervisor = await User.findOne({
-      where: { designation: 'supervisor' },
-      order: [['created_at', 'ASC']],
+    const level2Officer = await User.findOne({
+      where: { email: 'officer3@example.com' },
     });
 
-    if (!supervisor) {
+    if (!level2Officer) {
       return res.status(404).json({
         success: false,
-        message: 'No supervisor found',
+        message: 'No level 2 officer found',
       });
     }
 
-    const createdAt = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const isHigh = Number(day) === 7;
+    const dayCount = isHigh ? 7 : 15;
+    const createdAt = new Date(now.getTime() - dayCount * 24 * 60 * 60 * 1000);
     const breachedAt = new Date(now.getTime() - 60 * 60 * 1000);
 
     await issue.update({
       created_at: createdAt,
       sla_deadline: breachedAt,
-      severity: 'high',
+      severity: isHigh ? 'high' : 'low',
       escalation_level: 2,
-      escalation_label: 'Supervisor',
-      assigned_to: supervisor.id,
+      escalation_label: 'Level 2',
+      assigned_to: level2Officer.id,
       escalated: true,
       escalated_at: breachedAt,
       status: 'Escalated',
     });
 
+    try {
+      const supervisor = await User.findOne({
+        where: { designation: 'supervisor' },
+      });
+      await sendEscalationEmail(issue, supervisor);
+    } catch (emailError) {
+      console.warn('[DEMO] Escalation email failed', emailError.message);
+    }
+
     return res.json({
       success: true,
-      message: 'Day 7 simulated — assigned to Supervisor',
+      message: isHigh
+        ? 'Day 7 simulated — assigned to Level 2'
+        : 'Day 15 simulated — assigned to Level 2',
     });
   } catch (error) {
     return next(error);

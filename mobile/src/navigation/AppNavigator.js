@@ -4,12 +4,14 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { ActivityIndicator, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import LoginScreen from "../screens/LoginScreen";
-import SignupScreen from "../screens/SignupScreen";
+import EmailEntryScreen from "../screens/auth/EmailEntryScreen";
+import NameEntryScreen from "../screens/auth/NameEntryScreen";
+import OTPVerificationScreen from "../screens/auth/OTPVerificationScreen";
 import HomeScreen from "../screens/HomeScreen";
 import ReportScreen from "../screens/ReportScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import IssueDetailScreen from "../screens/IssueDetailScreen";
+import StatsDashboardScreen from "../screens/StatsDashboardScreen";
 import { useAuth } from "../context/AuthContext";
 
 const Stack = createNativeStackNavigator();
@@ -69,6 +71,7 @@ const HomeStackNavigator = () => (
     }}
   >
     <Stack.Screen name="HomeTab" component={MainTabs} />
+    <Stack.Screen name="StatsDashboard" component={StatsDashboardScreen} />
     <Stack.Screen
       name="IssueDetail"
       component={IssueDetailScreen}
@@ -85,8 +88,9 @@ const HomeStackNavigator = () => (
 
 const AuthNavigator = () => (
   <Stack.Navigator screenOptions={{ headerShown: false }}>
-    <Stack.Screen name="Login" component={LoginScreen} />
-    <Stack.Screen name="Signup" component={SignupScreen} />
+    <Stack.Screen name="EmailEntry" component={EmailEntryScreen} />
+    <Stack.Screen name="NameEntry" component={NameEntryScreen} />
+    <Stack.Screen name="OTPVerification" component={OTPVerificationScreen} />
   </Stack.Navigator>
 );
 

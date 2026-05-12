@@ -71,12 +71,38 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   };
 
+  const checkUserExists = async ({ email }) => {
+    const { data } = await api.post('/api/auth/check-user', { email });
+    return !!data?.exists;
+  };
+
+  const requestEmailOtp = async ({ name, email }) => {
+    await api.post('/api/auth/send-otp', { name, email });
+    return true;
+  };
+
+  const verifyEmailOtp = async ({ name, email, otp }) => {
+    const { data } = await api.post('/api/auth/verify-otp', { name, email, otp });
+    await persistSession(data.token, data.user);
+    return data.user;
+  };
+
   const logout = async () => {
     await clearSession();
   };
 
   const value = useMemo(
-    () => ({ user, token, initializing, login, register, logout }),
+    () => ({
+      user,
+      token,
+      initializing,
+      login,
+      register,
+      checkUserExists,
+      requestEmailOtp,
+      verifyEmailOtp,
+      logout,
+    }),
     [user, token, initializing]
   );
 

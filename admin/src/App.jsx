@@ -17,7 +17,7 @@ const ProtectedLayout = ({ children }) => {
     return <Navigate to="/login" replace />;
   }
 
-  if (!designation) {
+  if (!designation || designation === 'zonal_officer') {
     localStorage.removeItem('admin_token');
     localStorage.removeItem('designation');
     localStorage.removeItem('name');

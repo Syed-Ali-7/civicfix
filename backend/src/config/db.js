@@ -7,6 +7,7 @@ if (!databaseUrl) {
   throw new Error('DATABASE_URL is not set in the environment variables');
 }
 
+// DOCKER DATABASE FIX
 const sequelize = new Sequelize(databaseUrl, {
   dialect: 'postgres',
   logging: false,

@@ -6,8 +6,13 @@ const { computePHash, findSimilarImages } = require('../utils/phash');
 const { runAIPipeline } = require('../utils/aiPipelineService');
 const { calculateDistanceMeters } = require('../utils/distance');
 const logger = require('../utils/logger');
+const { sendPushNotification } = require('../utils/notificationService');
+const { sendEscalationEmail } = require('../services/emailService');
 const path = require('path');
 const fs = require('fs');
+
+const LEVEL_1_OFFICER_EMAIL = 'officer1@example.com';
+const LEVEL_2_OFFICER_EMAIL = 'officer3@example.com';
 
 // EXIF + geo distance validation
 // We use exiftool to read EXIF metadata from uploaded images (if present)
@@ -426,6 +431,7 @@ const createIssue = async (req, res, next) => {
       longitude,
       address,
       status,
+      reporter_id: req.user?.userId || null,
       needs_review: false, // Only valid potholes reach here
       phash,
       ai_verified: ai_verified !== null ? ai_verified : true,
@@ -436,24 +442,24 @@ const createIssue = async (req, res, next) => {
       sla_deadline,
     });
 
-    // ESCALATION SYSTEM: assign freshly created issue to a field engineer
-    const fieldEngineer = await User.findOne({
-      where: { designation: 'field_engineer' },
+    // ESCALATION SYSTEM: assign freshly created issue to level 1 officer
+    const level1Officer = await User.findOne({
+      where: { email: LEVEL_1_OFFICER_EMAIL },
     });
 
-    if (fieldEngineer) {
+    if (level1Officer) {
       await issue.update({
-        assigned_to: fieldEngineer.id,
-        escalation_level: 0,
-        escalation_label: 'Field Engineer',
+        assigned_to: level1Officer.id,
+        escalation_level: 1,
+        escalation_label: 'Level 1',
       });
       const refreshed = await Issue.findByPk(issue.id);
       console.log('[VERIFY] assigned_to in DB:', refreshed.assigned_to);
       console.log(
-        `[ASSIGN] Issue #${issue.id} assigned to Field Engineer ${fieldEngineer.name}`
+        `[ASSIGN] Issue #${issue.id} assigned to Level 1 ${level1Officer.name}`
       );
     } else {
-      console.log('[ASSIGN] No field engineer found');
+      console.log('[ASSIGN] No level 1 officer found');
     }
     
     logger.success('Issue created', { id: issue.id, severity, sla_deadline });
@@ -496,8 +502,9 @@ const getIssues = async (req, res, next) => {
     const role = req.user.role;
     const designation = req.user.designation;
     const userId = req.user.userId;
+    const userEmail = (req.user.email || '').toLowerCase();
 
-    if (role === 'citizen' || !designation || role !== 'admin') {
+    if (role === 'citizen' || !designation) {
       const allIssues = await Issue.findAll({
         include,
         order: [['created_at', 'DESC']],
@@ -508,13 +515,12 @@ const getIssues = async (req, res, next) => {
     // ESCALATION SYSTEM: designation-based issue visibility
     const where = {};
 
-    if (designation === 'field_engineer') {
-      where.escalation_level = 0;
-      where.assigned_to = userId;
-    } else if (designation === 'zonal_officer') {
+    if (userEmail === LEVEL_1_OFFICER_EMAIL) {
       where.escalation_level = 1;
       where.assigned_to = userId;
-    } else if (designation !== 'supervisor') {
+    } else if (userEmail === LEVEL_2_OFFICER_EMAIL) {
+      where.escalation_level = { [Op.in]: [1, 2] };
+    } else if (designation !== 'supervisor' && role !== 'admin') {
       return res.status(403).json({
         message: 'Forbidden: invalid designation for dashboard access',
       });
@@ -528,10 +534,9 @@ const getIssues = async (req, res, next) => {
 
     const enriched = issues.map(enrichIssue);
 
-    if (designation === 'supervisor') {
+    if (designation === 'supervisor' || role === 'admin' || userEmail === LEVEL_2_OFFICER_EMAIL) {
       return res.json({
         issues: enriched,
-        level_0_count: enriched.filter((i) => i.escalation_level === 0).length,
         level_1_count: enriched.filter((i) => i.escalation_level === 1).length,
         level_2_count: enriched.filter((i) => i.escalation_level === 2).length,
       });
@@ -594,7 +599,51 @@ const updateIssueStatus = async (req, res, next) => {
       updates.resolved_at = new Date();
     }
 
+    const shouldNotifyResolved =
+      updates.status === 'Resolved' && issue.status !== 'Resolved';
+    const shouldEmailEscalated =
+      updates.status === 'Escalated' && issue.status !== 'Escalated';
+
     await issue.update(updates);
+
+    if (shouldNotifyResolved) {
+      // EXPO PUSH NOTIFICATIONS
+      // Token saved per device per user
+      // Notifications fire on: Escalated, Resolved only
+      // Never fire for: Open status changes
+      try {
+        const reporter = issue.reporter_id
+          ? await User.findByPk(issue.reporter_id)
+          : null;
+        await sendPushNotification(
+          reporter?.push_token,
+          'Issue Resolved',
+          'Your pothole report has been resolved. Please confirm if the issue is fixed.',
+          { issueId: issue.id, screen: 'IssueDetail' }
+        );
+      } catch (notifyError) {
+        logger.warn('[ISSUE] Resolved notification failed', {
+          message: notifyError.message,
+        });
+      }
+    }
+
+    if (shouldEmailEscalated) {
+      logger.info('[ISSUE] Manual escalation detected, sending email', {
+        issueId: issue.id,
+        status: updates.status,
+      });
+      try {
+        const supervisor = await User.findOne({
+          where: { designation: 'supervisor' },
+        });
+        await sendEscalationEmail(issue, supervisor);
+      } catch (emailError) {
+        logger.warn('[ISSUE] Escalation email failed', {
+          message: emailError.message,
+        });
+      }
+    }
     return res.json(issue);
   } catch (error) {
     return next(error);
@@ -681,7 +730,32 @@ const updateIssue = async (req, res, next) => {
       updates.resolved_at = new Date();
     }
 
+    const shouldNotifyResolved =
+      updates.status === 'Resolved' && issue.status !== 'Resolved';
+
     await issue.update(updates);
+
+    if (shouldNotifyResolved) {
+      // EXPO PUSH NOTIFICATIONS
+      // Token saved per device per user
+      // Notifications fire on: Escalated, Resolved only
+      // Never fire for: Open status changes
+      try {
+        const reporter = issue.reporter_id
+          ? await User.findByPk(issue.reporter_id)
+          : null;
+        await sendPushNotification(
+          reporter?.push_token,
+          'Issue Resolved',
+          'Your pothole report has been resolved. Please confirm if the issue is fixed.',
+          { issueId: issue.id, screen: 'IssueDetail' }
+        );
+      } catch (notifyError) {
+        logger.warn('[ISSUE] Resolved notification failed', {
+          message: notifyError.message,
+        });
+      }
+    }
     return res.json(issue);
   } catch (error) {
     return next(error);
@@ -805,13 +879,12 @@ const submitIssueFeedback = async (req, res, next) => {
       });
     }
 
-    const zonalOfficer = await User.findOne({
-      where: { designation: 'zonal_officer' },
-      order: [['created_at', 'ASC']],
+    const level2Officer = await User.findOne({
+      where: { email: LEVEL_2_OFFICER_EMAIL },
     });
 
-    if (!zonalOfficer) {
-      return res.status(404).json({ message: 'No zonal officer found' });
+    if (!level2Officer) {
+      return res.status(404).json({ message: 'No level 2 officer found' });
     }
 
     let host = req.get('host');
@@ -833,9 +906,9 @@ const submitIssueFeedback = async (req, res, next) => {
       reopen_count: Number(issue.reopen_count || 0) + 1,
       rejection_photo_url: rejectionPhotoUrl,
       rejected_at: now,
-      escalation_level: 1,
-      escalation_label: 'Zonal Officer',
-      assigned_to: zonalOfficer.id,
+      escalation_level: 2,
+      escalation_label: 'Level 2',
+      assigned_to: level2Officer.id,
       escalated: true,
       escalated_at: now,
       sla_deadline: newDeadline,
@@ -843,7 +916,7 @@ const submitIssueFeedback = async (req, res, next) => {
 
     return res.json({
       success: true,
-      message: 'Issue reopened and escalated to Zonal Officer.',
+      message: 'Issue reopened and escalated to Level 2.',
       issue,
     });
   } catch (error) {

@@ -17,7 +17,7 @@ const User = sequelize.define(
     },
     email: {
       type: DataTypes.STRING,
-      allowNull: false,
+      allowNull: true,
       unique: true,
       validate: {
         isEmail: true,
@@ -25,7 +25,7 @@ const User = sequelize.define(
     },
     password: {
       type: DataTypes.STRING,
-      allowNull: false,
+      allowNull: true,
     },
     role: {
       type: DataTypes.ENUM(...roles),
@@ -34,6 +34,15 @@ const User = sequelize.define(
     },
     designation: {
       type: DataTypes.STRING(30),
+      allowNull: true,
+    },
+    phone: {
+      type: DataTypes.STRING(15),
+      allowNull: true,
+      unique: true,
+    },
+    push_token: {
+      type: DataTypes.STRING,
       allowNull: true,
     },
   },

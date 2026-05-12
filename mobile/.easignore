@@ -1,0 +1,33 @@
+node_modules
+.git
+.expo
+dist
+build
+coverage
+.cache
+
+# backend
+backend
+
+# AI
+dataset
+datasets
+models
+*.h5
+*.pt
+*.pth
+*.onnx
+
+# docker
+Dockerfile
+docker-compose.yml
+
+# uploads
+uploads
+temp
+
+# archives/media
+*.zip
+*.rar
+*.tar
+*.mp4

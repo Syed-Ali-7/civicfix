@@ -21,23 +21,18 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import { adminAPI, issuesAPI, default as api } from "../api/api";
 
 const designationLabels = {
-  field_engineer: "Field Engineer",
-  zonal_officer: "Zonal Officer",
   supervisor: "Supervisor",
 };
 
 const levelMeta = {
-  0: { color: "primary", label: "Field Engineer" },
-  1: { color: "warning", label: "Zonal Officer" },
-  2: { color: "error", label: "Supervisor" },
+  1: { color: "primary", label: "Level 1" },
+  2: { color: "error", label: "Level 2" },
 };
 
 const statusColor = (status) => {
   switch (status) {
     case "Open":
       return "warning";
-    case "In Progress":
-      return "info";
     case "Resolved":
       return "success";
     case "Escalated":
@@ -117,7 +112,6 @@ const Dashboard = () => {
   const [error, setError] = useState("");
   const [issues, setIssues] = useState([]);
   const [counts, setCounts] = useState({
-    level_0_count: 0,
     level_1_count: 0,
     level_2_count: 0,
   });
@@ -154,11 +148,12 @@ const Dashboard = () => {
         ? { issues: response }
         : { issues: response.issues || [], ...response };
 
-      setIssues(payload.issues || []);
+      const nextIssues = payload.issues || [];
+      setIssues(nextIssues);
+
       setCounts({
-        level_0_count: payload.level_0_count || 0,
-        level_1_count: payload.level_1_count || 0,
-        level_2_count: payload.level_2_count || 0,
+        level_1_count: nextIssues.filter((i) => i.escalation_level === 1).length,
+        level_2_count: nextIssues.filter((i) => i.escalation_level === 2).length,
       });
       setError("");
     } catch (err) {
@@ -313,7 +308,9 @@ const Dashboard = () => {
       return issues;
     }
 
-    return issues.filter((issue) => issue.escalation_level === levelFilter);
+    return issues.filter(
+      (issue) => Number(issue.escalation_level) === Number(levelFilter)
+    );
   }, [designation, issues, levelFilter]);
 
   const nearDeadlineCount = useMemo(
@@ -334,8 +331,6 @@ const Dashboard = () => {
   );
 
   const pageTitle = useMemo(() => {
-    if (designation === "field_engineer") return "My Assigned Issues";
-    if (designation === "zonal_officer") return "Escalated Issues - Level 1";
     if (designation === "supervisor") return "All Issues - Full Overview";
     return "Issues Dashboard";
   }, [designation]);
@@ -424,42 +419,6 @@ const Dashboard = () => {
   };
 
   const columns = useMemo(() => {
-    if (designation === "field_engineer") {
-      return [
-        ...baseColumns.slice(0, 2),
-        {
-          field: "location",
-          headerName: "Location",
-          minWidth: 220,
-          flex: 1,
-          valueGetter: (value, rowOrParams) => {
-            const row = rowOrParams?.row || rowOrParams || {};
-            return row.address || value || "-";
-          },
-        },
-        ...baseColumns.slice(2),
-        actionColumn,
-      ];
-    }
-
-    if (designation === "zonal_officer") {
-      return [
-        ...baseColumns,
-        {
-          field: "escalated_at",
-          headerName: "Escalated At",
-          minWidth: 220,
-          flex: 1,
-          renderCell: (params) => (
-            <Typography sx={{ color: "warning.main", fontWeight: 600 }}>
-              {formatDateTime(params.value)}
-            </Typography>
-          ),
-        },
-        actionColumn,
-      ];
-    }
-
     if (designation === "supervisor") {
       return [
         ...baseColumns.slice(0, 4),
@@ -515,18 +474,6 @@ const Dashboard = () => {
         </Alert>
       )}
 
-      {designation === "field_engineer" && nearDeadlineCount > 0 && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {nearDeadlineCount} issues approaching SLA deadline
-        </Alert>
-      )}
-
-      {designation === "zonal_officer" && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {issues.length} Level 1 escalations assigned to you
-        </Alert>
-      )}
-
       {designation === "supervisor" && level2Count > 0 && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {level2Count} issues at Level 2 - Immediate action required
@@ -537,7 +484,6 @@ const Dashboard = () => {
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
           {[
             { key: "all", label: "Total Issues", value: issues.length },
-            { key: 0, label: "Level 0", value: counts.level_0_count },
             { key: 1, label: "Level 1", value: counts.level_1_count },
             { key: 2, label: "Level 2", value: counts.level_2_count },
           ].map((card) => (

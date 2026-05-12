@@ -55,6 +55,16 @@ const Login = () => {
         return;
       }
 
+      if (response.user.designation === "zonal_officer") {
+        setError("Access denied: Zonal Officer accounts no longer have dashboard access.");
+        return;
+      }
+
+      if ((response.user.email || "").toLowerCase() === "officer2@example.com") {
+        setError("Access denied for this account.");
+        return;
+      }
+
       localStorage.setItem("admin_token", response.token);
       localStorage.setItem("designation", response.user.designation);
       localStorage.setItem("name", response.user.name || "Officer");

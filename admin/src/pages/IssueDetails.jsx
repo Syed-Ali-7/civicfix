@@ -131,8 +131,6 @@ const IssueDetails = () => {
     switch (status) {
       case "Open":
         return "warning";
-      case "In Progress":
-        return "info";
       case "Resolved":
         return "success";
       default:
@@ -377,7 +375,6 @@ const IssueDetails = () => {
                   label="Status"
                 >
                   <MenuItem value="Open">Open</MenuItem>
-                  <MenuItem value="In Progress">In Progress</MenuItem>
                   <MenuItem value="Resolved">Resolved</MenuItem>
                 </Select>
               </FormControl>

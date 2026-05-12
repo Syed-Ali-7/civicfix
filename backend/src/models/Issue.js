@@ -5,7 +5,6 @@ const { User } = require('./User');
 // SLA TRACKER: Added status states for escalation and citizen feedback flow
 const statuses = [
   'Open',
-  'In Progress',
   'Resolved',
   'Escalated',
   'Closed',
@@ -138,22 +137,27 @@ const Issue = sequelize.define(
       type: DataTypes.DATE,
       allowNull: true,
     },
+    // Citizen reference: who reported the issue
+    reporter_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
     // ESCALATION SYSTEM: currently assigned officer for this issue
     assigned_to: {
       type: DataTypes.UUID,
       allowNull: true,
     },
-    // ESCALATION SYSTEM: 0=Field Engineer, 1=Zonal Officer, 2=Supervisor
+    // ESCALATION SYSTEM: 1=Level 1, 2=Level 2
     escalation_level: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      defaultValue: 0,
+      defaultValue: 1,
     },
     // ESCALATION SYSTEM: human readable level label
     escalation_label: {
       type: DataTypes.STRING(20),
       allowNull: false,
-      defaultValue: 'Field Engineer',
+      defaultValue: 'Level 1',
     },
   },
   {
@@ -168,6 +172,11 @@ const Issue = sequelize.define(
 Issue.belongsTo(User, {
   foreignKey: 'assigned_to',
   as: 'assignedOfficer',
+});
+
+Issue.belongsTo(User, {
+  foreignKey: 'reporter_id',
+  as: 'reporter',
 });
 
 module.exports = {

@@ -20,8 +20,8 @@ import { useAuth } from "../context/AuthContext";
 
 const STATUS_COLORS = {
   Open: "#f97316",
-  "In Progress": "#eab308",
   Resolved: "#22c55e",
+  Escalated: "#ef4444",
 };
 
 const HomeScreen = ({ navigation }) => {
@@ -83,7 +83,7 @@ const HomeScreen = ({ navigation }) => {
             new Date(b.created_at || b.createdAt)
           );
         case "status":
-          const statusOrder = { Open: 1, "In Progress": 2, Resolved: 3 };
+            const statusOrder = { Open: 1, Escalated: 2, Resolved: 3 };
           return statusOrder[a.status] - statusOrder[b.status];
         default:
           return 0;
@@ -112,13 +112,22 @@ const HomeScreen = ({ navigation }) => {
           <Text variant="bodyMedium" style={styles.caption}>
             Here’s what’s happening around your community today.
           </Text>
+          <Button
+            mode="outlined"
+            onPress={() => navigation.navigate('StatsDashboard')}
+            style={styles.statsButton}
+          >
+            Road Safety Stats
+          </Button>
         </View>
-        <IconButton
-          icon="refresh"
-          onPress={onRefresh}
-          iconColor="#2563eb"
-          size={24}
-        />
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <IconButton
+            icon="refresh"
+            onPress={onRefresh}
+            iconColor="#2563eb"
+            size={24}
+          />
+        </View>
       </View>
 
       {/* Filter Buttons */}
@@ -128,7 +137,7 @@ const HomeScreen = ({ navigation }) => {
           showsHorizontalScrollIndicator={false}
           style={styles.filterScroll}
         >
-          {["All", "Open", "In Progress", "Resolved"].map((status) => (
+            {["All", "Open", "Escalated", "Resolved"].map((status) => (
             <Chip
               key={status}
               selected={selectedFilter === status}
@@ -238,6 +247,11 @@ const styles = StyleSheet.create({
   },
   greeting: {
     fontWeight: "700",
+  },
+  statsButton: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingHorizontal: 8,
   },
   caption: {
     color: "#64748b",

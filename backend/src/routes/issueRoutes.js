@@ -38,8 +38,8 @@ const createIssueValidation = [
     .withMessage('Longitude is invalid'),
   body('status')
     .optional()
-    .isIn(['Open', 'In Progress', 'Resolved', 'Escalated', 'Closed', 'Reopened'])
-    .withMessage('Status must be Open, In Progress, Resolved, Escalated, Closed, or Reopened'),
+    .isIn(['Open', 'Resolved', 'Escalated', 'Closed', 'Reopened'])
+    .withMessage('Status must be Open, Resolved, Escalated, Closed, or Reopened'),
 ];
 
 const updateIssueValidation = [
@@ -64,8 +64,8 @@ const updateIssueValidation = [
     .withMessage('Longitude is invalid'),
   body('status')
     .optional()
-    .isIn(['Open', 'In Progress', 'Resolved', 'Escalated', 'Closed', 'Reopened'])
-    .withMessage('Status must be Open, In Progress, Resolved, Escalated, Closed, or Reopened'),
+    .isIn(['Open', 'Resolved', 'Escalated', 'Closed', 'Reopened'])
+    .withMessage('Status must be Open, Resolved, Escalated, Closed, or Reopened'),
 ];
 
 // AI PIPELINE INTEGRATION — Protected test route (admin only, dev use)
@@ -103,8 +103,8 @@ router.patch(
   issueIdValidation,
   [
     body('status')
-      .isIn(['Open', 'In Progress', 'Resolved', 'Escalated'])
-      .withMessage('Status must be Open, In Progress, Resolved, or Escalated'),
+      .isIn(['Open', 'Resolved', 'Escalated'])
+      .withMessage('Status must be Open, Resolved, or Escalated'),
   ],
   updateIssueStatus
 );

@@ -1,0 +1,178 @@
+const { Resend } = require('resend');
+
+const getResendClient = () => {
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('Resend API key is not set');
+  }
+
+  return new Resend(process.env.RESEND_API_KEY);
+};
+
+const DEFAULT_FROM = 'onboarding@resend.dev';
+
+const formatDateTime = (value) => {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const buildHtml = (issue, supervisor, daysOverdue) => {
+  const issueId = String(issue.id || '').slice(0, 8);
+  const severity = (issue.severity || 'low').toLowerCase() === 'high' ? 'HIGH' : 'LOW';
+  const severityColor = severity === 'HIGH' ? '#C0392B' : '#F39C12';
+  const address = issue.address || 'See GPS coordinates below';
+  const createdAt = formatDateTime(issue.created_at || issue.createdAt);
+  const slaDeadline = formatDateTime(issue.sla_deadline);
+  const escalatedAt = formatDateTime(new Date());
+  const latitude = issue.latitude ?? '-';
+  const longitude = issue.longitude ?? '-';
+  const mapsLink = `https://maps.google.com/?q=${latitude},${longitude}`;
+
+  const photoSection = issue.photo_url
+    ? `<img src="${issue.photo_url}" style="width:100%;max-width:480px;border-radius:8px;border:2px solid #E0E0E0" alt="Issue photo"/>`
+    : '<p style="margin:0;color:#9ca3af;font-style:italic;">No photo available</p>';
+
+  return `
+    <div style="font-family:Arial, sans-serif; color:#111827;">
+      <div style="background:#C0392B;color:#ffffff;padding:16px 20px;border-radius:6px 6px 0 0;">
+        <div style="font-size:22px;font-weight:700;">CivicFix — SLA Breach Alert</div>
+        <div style="font-size:13px;margin-top:6px;">This issue requires your immediate attention</div>
+      </div>
+
+      <div style="padding:16px 20px;border:1px solid #E0E0E0;border-top:none;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <tr style="background:#F5F6FA;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">Issue ID</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">${issueId}</td>
+          </tr>
+          <tr style="background:#FAFAFA;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">Description</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">${issue.description || '-'}</td>
+          </tr>
+          <tr style="background:#FFFFFF;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">Severity</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">
+              <span style="color:${severityColor};font-weight:700;">${severity}</span>
+            </td>
+          </tr>
+          <tr style="background:#FAFAFA;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">Location</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">${address}</td>
+          </tr>
+          <tr style="background:#FFFFFF;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">GPS Coordinates</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">${latitude}, ${longitude}</td>
+          </tr>
+          <tr style="background:#FAFAFA;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">Reported On</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">${createdAt}</td>
+          </tr>
+          <tr style="background:#FFFFFF;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">SLA Deadline</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">${slaDeadline}</td>
+          </tr>
+          <tr style="background:#FAFAFA;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">Days Overdue</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;color:#C0392B;font-weight:700;">${daysOverdue}</td>
+          </tr>
+          <tr style="background:#FFFFFF;">
+            <td style="padding:10px;border:1px solid #E0E0E0;font-weight:700;">Escalated At</td>
+            <td style="padding:10px;border:1px solid #E0E0E0;">${escalatedAt}</td>
+          </tr>
+        </table>
+
+        <div style="text-align:center;margin:20px 0;">
+          <a href="${mapsLink}" style="background:#1976D2;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-size:14px;display:inline-block;">
+            View Location on Google Maps
+          </a>
+        </div>
+
+        <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">Photo submitted by citizen</div>
+        ${photoSection}
+      </div>
+
+      <div style="border-top:1px solid #E0E0E0;background:#F5F6FA;padding:12px 20px;font-size:12px;color:#6b7280;">
+        <div>This is an automated alert generated by CivicFix.</div>
+        <div>Please do not reply to this email.</div>
+        <div style="margin-top:6px;font-size:11px;color:#999999;">Generated at: ${new Date().toISOString()}</div>
+      </div>
+    </div>
+  `;
+};
+
+const buildSubject = (issue, daysOverdue) => {
+  const severity = (issue.severity || 'low').toLowerCase() === 'high' ? 'HIGH' : 'LOW';
+  return `[CivicFix] URGENT — Issue Escalated | Severity: ${severity} | ${daysOverdue} Days Overdue`;
+};
+
+const sendEscalationEmail = async (issue, supervisor) => {
+  // EMAIL ESCALATION
+  if (!process.env.RESEND_API_KEY) {
+    console.warn('[EMAIL] Warning: Resend API key not set. Escalation emails will be skipped.');
+    return;
+  }
+
+  try {
+    const resend = getResendClient();
+
+    const createdAt = new Date(issue.created_at || issue.createdAt);
+    const daysOverdue = Math.floor((Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+
+
+    console.log('[EMAIL] Sending escalation email', {
+      from: DEFAULT_FROM,
+      to: 'civicfixsupervisor7@gmail.com',
+      issueId: issue.id,
+    });
+
+    await resend.emails.send({
+      from: `CivicFix Alert <${DEFAULT_FROM}>`,
+      to: 'civicfixsupervisor7@gmail.com',
+      subject: buildSubject(issue, daysOverdue),
+      html: buildHtml(issue, supervisor, daysOverdue),
+    });
+
+    console.log(
+      `[EMAIL] Escalation email sent to civicfixsupervisor7@gmail.com from ${DEFAULT_FROM} for Issue #${issue.id}`
+    );
+  } catch (error) {
+    console.log(
+      `[EMAIL ERROR] Failed — ${error.message} for Issue #${issue.id}`
+    );
+  }
+};
+
+const sendOTPEmail = async (email, otp) => {
+  if (!email) {
+    throw new Error('Email is required');
+  }
+
+  const resend = getResendClient();
+
+  const subject = 'CivicFix Email Verification';
+  const text = `Your CivicFix verification code is ${otp}. This OTP expires in 5 minutes.`;
+
+  console.log('Sending OTP email...', { to: email });
+
+  try {
+    await resend.emails.send({
+      from: `CivicFix <${DEFAULT_FROM}>`,
+      to: email,
+      subject,
+      text,
+    });
+    console.log('OTP email sent successfully', { to: email });
+  } catch (error) {
+    console.error('OTP email failed:', error);
+    throw error;
+  }
+};
+
+module.exports = { sendEscalationEmail, sendOTPEmail };

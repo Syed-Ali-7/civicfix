@@ -15,8 +15,8 @@ import api, { API_BASE_URL } from "../utils/api";
 
 const STATUS_COLORS = {
   Open: "#f97316",
-  "In Progress": "#eab308",
   Resolved: "#22c55e",
+  Escalated: "#ef4444",
   Closed: "#16a34a",
   Reopened: "#dc2626",
 };

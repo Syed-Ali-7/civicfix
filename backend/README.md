@@ -143,7 +143,7 @@ See `VIEW_USERS.md` for detailed instructions.
 - `PUT /api/issues/:id` – staff/admin update issue details.
 - `DELETE /api/issues/:id` – admin remove issue.
 
-Each issue stores latitude/longitude and supports status transitions: `Open`, `In Progress`, `Resolved`.
+Each issue stores latitude/longitude and supports status transitions: `Open`, `Resolved`.
 
 ## Health Check
 

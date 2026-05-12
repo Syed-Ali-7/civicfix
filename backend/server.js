@@ -7,12 +7,29 @@ const issueRoutes = require('./src/routes/issueRoutes');
 const aiRoutes = require('./src/routes/aiRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
 const demoRoutes = require('./src/routes/demoRoutes');
+const userRoutes = require('./src/routes/userRoutes');
 const errorHandler = require('./src/middleware/errorHandler');
 const { connectDB, sequelize } = require('./src/config/db');
 // SLA TRACKER: Background service for SLA breach escalation
 const slaEscalationService = require('./src/services/slaEscalationService');
+const fs = require('fs');
 
 dotenv.config();
+
+if (!process.env.RESEND_API_KEY) {
+  console.warn(
+    '[EMAIL] Warning: Resend API key not set. Escalation emails will be skipped.'
+  );
+}
+
+const logAIPipelineStatus = () => {
+  const pipelinePath = path.resolve(process.cwd(), 'ai', 'ai_pipeline.py');
+  const exists = fs.existsSync(pipelinePath);
+  console.log(`[AI] Resolved pipeline path: ${pipelinePath}`);
+  if (!exists) {
+    console.error('[AI] ai_pipeline.py not found. AI pipeline will use safe defaults.');
+  }
+};
 
 const app = express();
 
@@ -54,6 +71,7 @@ app.post('/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/issues', issueRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/admin', adminRoutes);
@@ -68,6 +86,8 @@ const startServer = async () => {
   try {
     await connectDB();
     await sequelize.sync();
+
+    logAIPipelineStatus();
 
     // SLA TRACKER: Start hourly escalation checks
     slaEscalationService.start();

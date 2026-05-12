@@ -28,7 +28,6 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import FastForwardIcon from "@mui/icons-material/FastForward";
 import BoltIcon from "@mui/icons-material/Bolt";
 import EngineeringIcon from "@mui/icons-material/Engineering";
-import SupervisorAccountIcon from "@mui/icons-material/SupervisorAccount";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import api, { adminAPI, issuesAPI } from "../api/api";
 
@@ -60,18 +59,13 @@ const severityChip = (severity) => (
 
 const timelineSteps = [
   {
-    label: "Level 0 - Field Engineer",
+    label: "Level 1 - Officer 1",
     subtext: "Initial assignment - SLA starts",
     icon: <EngineeringIcon fontSize="small" />,
   },
   {
-    label: "Level 1 - Zonal Officer",
-    subtext: "Day 5 (high) / Day 10 (low) - SLA 70% elapsed",
-    icon: <SupervisorAccountIcon fontSize="small" />,
-  },
-  {
-    label: "Level 2 - Supervisor",
-    subtext: "Day 7 (high) / Day 15 (low) - SLA fully breached",
+    label: "Level 2 - Officer 3",
+    subtext: "Day 7 (high) / Day 15 (low) - SLA breached",
     icon: <AdminPanelSettingsIcon fontSize="small" />,
   },
 ];
@@ -268,7 +262,7 @@ const DemoPage = () => {
             <CardContent>
               <Typography variant="h6" color="primary">Reset Issue</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Resets issue to fresh Level 0 state assigned to Field Engineer
+                Resets issue to fresh Level 1 state assigned to Officer 1
               </Typography>
             </CardContent>
             <CardActions>
@@ -281,7 +275,7 @@ const DemoPage = () => {
                 onClick={() =>
                   handleDemoAction("reset", async () => {
                     await api.post("/demo/reset-issue", { issueId: selectedIssueId });
-                    return "Issue reset to Level 0 - Field Engineer";
+                    return "Issue reset to Level 1 - Officer 1";
                   })
                 }
               >
@@ -294,37 +288,9 @@ const DemoPage = () => {
         <Grid item xs={12} md={6} lg={3}>
           <Card>
             <CardContent>
-              <Typography variant="h6" color="warning.main">Simulate Day 5</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Simulates Day 5 breach - triggers Level 1 escalation to Zonal Officer
-              </Typography>
-            </CardContent>
-            <CardActions>
-              <Button
-                fullWidth
-                variant="contained"
-                color="warning"
-                startIcon={<FastForwardIcon />}
-                disabled={!selectedIssueId || loading}
-                onClick={() =>
-                  handleDemoAction("day5", async () => {
-                    await api.post("/demo/simulate-breach", { issueId: selectedIssueId, day: 5 });
-                    return "Day 5 simulated - run escalation to see effect";
-                  })
-                }
-              >
-                Simulate Day 5
-              </Button>
-            </CardActions>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} md={6} lg={3}>
-          <Card>
-            <CardContent>
               <Typography variant="h6" color="error.main">Simulate Day 7</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                Simulates Day 7 breach - triggers Level 2 escalation to Supervisor
+                Simulates Day 7 breach (high severity) - escalates to Level 2
               </Typography>
             </CardContent>
             <CardActions>
@@ -341,7 +307,35 @@ const DemoPage = () => {
                   })
                 }
               >
-                Simulate Day 7
+                Simulate Day 7 — High Severity
+              </Button>
+            </CardActions>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={6} lg={3}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" color="info.main">Simulate Day 15</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Simulates Day 15 breach (low severity) - escalates to Level 2
+              </Typography>
+            </CardContent>
+            <CardActions>
+              <Button
+                fullWidth
+                variant="contained"
+                color="info"
+                startIcon={<FastForwardIcon />}
+                disabled={!selectedIssueId || loading}
+                onClick={() =>
+                  handleDemoAction("day15", async () => {
+                    await api.post("/demo/simulate-breach", { issueId: selectedIssueId, day: 15 });
+                    return "Day 15 simulated - run escalation to see effect";
+                  })
+                }
+              >
+                Simulate Day 15 — Low Severity
               </Button>
             </CardActions>
           </Card>
@@ -396,7 +390,7 @@ const DemoPage = () => {
           <Typography variant="h6" sx={{ mb: 2 }}>Escalation Journey</Typography>
           <Stepper
             alternativeLabel
-            activeStep={Math.max(0, Math.min(2, Number(selectedIssue?.escalation_level || 0)))}
+            activeStep={Math.max(0, Math.min(1, Number(selectedIssue?.escalation_level || 0)))}
             sx={{
               "& .MuiStepIcon-root": { color: "grey.400" },
               "& .MuiStepIcon-root.Mui-active": { color: "primary.main" },
@@ -427,22 +421,19 @@ const DemoPage = () => {
               <TableRow>
                 <TableCell>Severity</TableCell>
                 <TableCell>SLA</TableCell>
-                <TableCell>Day 5/10</TableCell>
-                <TableCell>Day 7/15</TableCell>
+                <TableCell>Escalation</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               <TableRow>
                 <TableCell>High</TableCell>
                 <TableCell>7 days</TableCell>
-                <TableCell>{"-> Zonal Officer"}</TableCell>
-                <TableCell>{"-> Supervisor"}</TableCell>
+                <TableCell>{"Day 7 -> Supervisor"}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>Low</TableCell>
                 <TableCell>15 days</TableCell>
-                <TableCell>{"-> Zonal Officer"}</TableCell>
-                <TableCell>{"-> Supervisor"}</TableCell>
+                <TableCell>{"Day 15 -> Supervisor"}</TableCell>
               </TableRow>
             </TableBody>
           </Table>

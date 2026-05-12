@@ -18,7 +18,6 @@ const Topbar = () => {
 
   const designationMeta = {
     field_engineer: { color: 'primary', label: 'Field Engineer' },
-    zonal_officer: { color: 'warning', label: 'Zonal Officer' },
     supervisor: { color: 'error', label: 'Supervisor' },
   };
 
